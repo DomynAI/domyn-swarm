@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025-2026 Domyn
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 from pathlib import Path
 import re
@@ -9,8 +10,12 @@ import subprocess
 import jinja2
 import pytest
 
-from domyn_swarm.config.router import RamjetRouter, VllmRouter
+import domyn_swarm
+from domyn_swarm.config.router import THUNDERAGENT_POLICY, RamjetRouter, VllmRouter
 from domyn_swarm.config.swarm import DomynLLMSwarmConfig
+from domyn_swarm.helpers.data import get_device_slices
+from domyn_swarm.helpers.io import is_folder, path_exists
+from domyn_swarm.runtime import watchdog_args
 
 TPL_DIR = Path(__file__).resolve().parents[2] / "src" / "domyn_swarm" / "templates"
 
@@ -55,6 +60,27 @@ def _render_lb(router: dict) -> str:
             swarm_directory="/swarm/s1",
             collector_script_path="/opt/watchdog_collector.py",
             supervisor_script_path="/opt/lb_supervisor.py",
+        )
+    )
+
+
+def _render_replicas(router: dict) -> str:
+    cfg = _cfg(router)
+    return (
+        _env()
+        .get_template(cfg.backend.template_path.name)
+        .render(
+            cfg=cfg,
+            job_name="job",
+            path_exists=path_exists,
+            is_folder=is_folder,
+            cuda_visible_devices=get_device_slices(cfg.gpus_per_node, cfg.gpus_per_replica),
+            swarm_directory="/swarm/s1",
+            watchdog_script_path="/opt/watchdog.py",
+            build_watchdog_args=watchdog_args.build_watchdog_args,
+            args_to_str=watchdog_args.args_to_str,
+            dswarm_agent_version=domyn_swarm.__version__,
+            dcgm_core_counters_path="/dcgm/core.csv",
         )
     )
 
@@ -362,6 +388,7 @@ def test_rendered_lb_scripts_are_valid_bash(tmp_path):
         {"type": "nginx"},
         {"type": "vllm-router", "image": "/img/vr.sif"},
         {"type": "ramjet", "image": "/img/ramjet.sif"},
+        {"type": "dynamo", "policy": "thunderagent", "venv": "/shared/dyn-venv"},
     ):
         script = tmp_path / f"{router['type']}.sh"
         script.write_text(_render_lb(router))
@@ -461,3 +488,321 @@ def test_singularity_env_key_wins_over_vllm_api_key(tmp_path):
     text = (tmp_path / "serving" / "05-auth.conf").read_text()
     assert "from-singularity" in text
     assert "from-vllm" not in text
+
+
+def _bind_list(script: str, command: str) -> list[str]:
+    """Return the `--bind` entries of the `singularity exec` that runs `command`."""
+    head = script[: script.index(command)]
+    exec_line = head[head.rindex("singularity exec") :].split("\n", 1)[0]
+    bind = re.search(r"--bind (\S+)", exec_line).group(1)
+    return [entry.strip("\"'") for entry in bind.split(",")]
+
+
+def test_vllm_engine_render_is_unchanged():
+    out = _render_replicas({"type": "nginx"})
+    assert "vllm serve" in out
+    assert "dynamo.vllm" not in out
+
+
+def test_dynamo_worker_command():
+    out = _render_replicas({"type": "dynamo"})
+    assert "python3 -m dynamo.vllm --model" in out
+    assert "--namespace job" in out
+    assert "--discovery-backend file --request-plane tcp --event-plane zmq" in out
+    assert "SINGULARITYENV_PYTHONHASHSEED=0" in out
+    assert "tcp://*:$(( 20080 + global_id ))" in out
+    assert "vllm serve" not in out
+
+
+def test_dynamo_worker_serves_health_on_the_replica_port():
+    out = _render_replicas({"type": "dynamo"})
+    assert "SINGULARITYENV_DYN_SYSTEM_PORT=$port" in out
+    assert 'SINGULARITYENV_DYN_FILE_KV="$SWARM_DIR/dynamo-kv"' in out
+    assert 'mkdir -p "$SWARM_DIR/dynamo-kv"' in out
+    assert 'echo "$endpoint" > "$head_file"' in out
+
+
+def _start_dynamo_replica(tmp_path: Path, getent_output: str) -> subprocess.CompletedProcess:
+    """Run `start_vllm_replica 3 8003 node7` against stub `srun` and `getent`."""
+    out = _render_replicas({"type": "dynamo"})
+    start = out.index("function start_vllm_replica() {")
+    function = out[start : out.index("\n}\n", start) + 3]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "srun").write_text(
+        f'#!/bin/bash\nprintf "%s\\n" "$@" > {tmp_path}/argv\nenv > {tmp_path}/env\n'
+    )
+    (bin_dir / "getent").write_text(f"#!/bin/bash\nprintf '{getent_output}'\n")
+    for stub in bin_dir.iterdir():
+        stub.chmod(0o755)
+    return subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            f'PATH="{bin_dir}:$PATH"; LOG_DIR={tmp_path}/logs; SWARM_DIR={tmp_path}; '
+            "GPUS_PER_NODE=4 GPUS_PER_REPLICA=4 MOUNTS=/m VLLM_IMAGE=/img.sif "
+            "COLLECTOR_HOST=c COLLECTOR_PORT=1 DSWARM_AGENT_VERSION=0; "
+            f'{function}start_vllm_replica 3 8003 node7; wait "$!"',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_dynamo_worker_environment_and_kv_events_endpoint(tmp_path):
+    result = _start_dynamo_replica(
+        tmp_path, "10.2.1.45       STREAM node7\\n10.2.1.45       DGRAM\\n"
+    )
+    assert result.returncode == 0, result.stderr
+    env = dict(
+        line.split("=", 1) for line in (tmp_path / "env").read_text().splitlines() if "=" in line
+    )
+    assert env["SINGULARITYENV_DYN_SYSTEM_PORT"] == "8003"
+    assert env["SINGULARITYENV_DYN_SYSTEM_USE_ENDPOINT_HEALTH_STATUS"] == '["generate"]'
+    assert env["SINGULARITYENV_DYN_TCP_RPC_HOST"] == "10.2.1.45"
+    assert env["SINGULARITYENV_DYN_FILE_KV"] == f"{tmp_path}/dynamo-kv"
+    assert (tmp_path / "dynamo-kv").is_dir()
+    argv = (tmp_path / "argv").read_text().splitlines()
+    kv_events = json.loads(argv[argv.index("--kv-events-config") + 1])
+    assert kv_events == {
+        "enable_kv_cache_events": True,
+        "publisher": "zmq",
+        "topic": "",
+        "endpoint": "tcp://*:20083",
+    }
+
+
+def test_dynamo_worker_takes_the_rpc_host_from_an_ipv4_address():
+    out = _render_replicas({"type": "dynamo"})
+    assert 'getent ahostsv4 "$node"' in out
+    assert "getent hosts" not in out
+
+
+def test_dynamo_worker_stops_without_an_ipv4_address(tmp_path):
+    result = _start_dynamo_replica(tmp_path, "")
+    assert result.returncode == 1
+    assert "node7 has no IPv4 address" in result.stderr
+    assert not (tmp_path / "argv").exists()
+
+
+def test_dynamo_worker_uses_the_venv():
+    out = _render_replicas({"type": "dynamo", "venv": "/shared/dyn-venv"})
+    assert "/shared/dyn-venv/bin/python -m dynamo.vllm" in out
+    assert "/shared/dyn-venv" in _bind_list(out, "-m dynamo.vllm")
+
+
+def test_dynamo_round_robin_skips_kv_events():
+    out = _render_replicas({"type": "dynamo", "policy": "round_robin"})
+    assert "-m dynamo.vllm" in out
+    assert "--kv-events-config" not in out
+
+
+def test_rendered_replica_scripts_are_valid_bash(tmp_path):
+    for name, router in (
+        ("nginx", {"type": "nginx"}),
+        ("dynamo", {"type": "dynamo", "venv": "/shared/dyn-venv"}),
+        ("dynamo-rr", {"type": "dynamo", "policy": "round_robin"}),
+    ):
+        script = tmp_path / f"{name}.sh"
+        script.write_text(_render_replicas(router))
+        subprocess.run(["bash", "-n", str(script)], check=True)
+
+
+def test_dynamo_frontend_command():
+    out = _render_lb({"type": "dynamo", "policy": "thunderagent"})
+    assert "-m dynamo.frontend --http-host 127.0.0.1 --http-port $ROUTER_PORT" in out
+    assert "--namespace job" in out
+    assert "--discovery-backend file --request-plane tcp --event-plane zmq" in out
+    assert "DYN_IGNORE_OPENAI_FE_UNSUPPORTED_FIELDS=1" in out
+    assert "dynamo_thunderagent.yaml" in out
+    assert "env -u DYN_SYSTEM_PORT" in out
+    assert "--router-address 127.0.0.1:$ROUTER_PORT" in out
+
+
+def test_dynamo_frontend_binds_the_venv_and_the_policy_file():
+    out = _render_lb({"type": "dynamo", "policy": "thunderagent", "venv": "/shared/dyn-venv"})
+    assert "/shared/dyn-venv/bin/python -m dynamo.frontend" in out
+    assert _bind_list(out, "-m dynamo.frontend") == [
+        "$HOST_DIR",
+        "/shared/dyn-venv",
+        str(THUNDERAGENT_POLICY),
+    ]
+
+
+def test_dynamo_frontend_without_policy_file_binds_only_the_swarm_directory():
+    out = _render_lb({"type": "dynamo", "policy": "kv"})
+    assert "python3 -m dynamo.frontend" in out
+    assert _bind_list(out, "-m dynamo.frontend") == ["$HOST_DIR"]
+
+
+def test_dynamo_apply_restarts_the_frontend():
+    out = _render_lb({"type": "dynamo"})
+    body = _function_body(out, "router_apply_replicas")
+    assert body.index("router_stop") < body.index("( router_start )")
+
+
+def _run_dynamo_frontend(tmp_path: Path, health_check: str, script: str):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    singularity = bin_dir / "singularity"
+    singularity.write_text(
+        f'#!/bin/bash\nprintf "%s\\n" "$@" > {tmp_path}/argv\nenv > {tmp_path}/env\nexec sleep 30\n'
+    )
+    singularity.chmod(0o755)
+    curl = bin_dir / "curl"
+    curl.write_text(f"#!/bin/bash\n{health_check}\n")
+    curl.chmod(0o755)
+    for name in ("logs", "run"):
+        (tmp_path / name).mkdir()
+    cfg = _cfg({"type": "dynamo", "env": {"DYN_LOG": "info debug"}})
+    fragment = tmp_path / "router.sh"
+    fragment.write_text(
+        _env()
+        .get_template("routers/dynamo.sh.j2")
+        .render(router=cfg.backend.endpoint.router, cfg=cfg, job_name="job")
+    )
+    return subprocess.run(
+        [
+            "bash",
+            "-euc",
+            f'PATH="{bin_dir}:$PATH"; HOST_DIR={tmp_path}; WAIT_SEC=1; '
+            f"export DYN_SYSTEM_PORT=8300; source {fragment}; {script}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_dynamo_frontend_start_sets_the_frontend_environment(tmp_path):
+    result = _run_dynamo_frontend(
+        tmp_path,
+        health_check=f"test -s {tmp_path}/env",
+        script='router_start; test -s "$ROUTER_PID_FILE"; router_stop',
+    )
+    assert result.returncode == 0, result.stderr
+    env = dict(
+        line.split("=", 1) for line in (tmp_path / "env").read_text().splitlines() if "=" in line
+    )
+    assert env["DYN_FILE_KV"] == f"{tmp_path}/dynamo-kv"
+    assert env["PYTHONHASHSEED"] == "0"
+    assert env["DYN_IGNORE_OPENAI_FE_UNSUPPORTED_FIELDS"] == "1"
+    assert env["DYN_LOG"] == "info debug"
+    assert "DYN_SYSTEM_PORT" not in env
+    assert (tmp_path / "dynamo-kv").is_dir()
+    assert not (tmp_path / "run" / "router.pid").exists()
+    argv = (tmp_path / "argv").read_text().splitlines()
+    assert argv[:3] == ["exec", "--bind", str(tmp_path)]
+
+
+def test_dynamo_apply_returns_non_zero_when_the_frontend_never_gets_healthy(tmp_path):
+    result = _run_dynamo_frontend(
+        tmp_path,
+        health_check="exit 7",
+        script=(
+            "if router_apply_replicas /dev/null /dev/null; then echo applied; "
+            'else echo "failed rc=$?"; fi; echo still-running'
+        ),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["failed rc=1", "still-running"]
+    assert "dynamo frontend did not become healthy" in result.stderr
+    assert not (tmp_path / "run" / "router.pid").exists()
+
+
+def _snapshot(tmp_path: Path, router: dict) -> str:
+    """Run the rendered lb.sh `replica_snapshot` with the router's fragment sourced."""
+    out = _render_lb(router)
+    fragment_start = out.index("router_registrations() { :; }")
+    fragment = out[fragment_start : out.index("replica_snapshot() {")]
+    script = tmp_path / "snapshot.sh"
+    script.write_text(
+        f"{fragment}replica_snapshot() {{\n{_function_body(out, 'replica_snapshot')}\n}}\n"
+    )
+    return subprocess.run(
+        [
+            "bash",
+            "-euc",
+            f"HOST_DIR={tmp_path}; SERVING_DIR={tmp_path}/serving; "
+            f"source {script}; replica_snapshot",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def _instances(tmp_path: Path) -> Path:
+    instances = tmp_path / "dynamo-kv" / "v1" / "instances"
+    instances.mkdir(parents=True)
+    return instances
+
+
+def test_dynamo_registrations_list_generate_instances_sorted(tmp_path):
+    instances = _instances(tmp_path)
+    for name in (
+        "job%2Fbackend%2Fgenerate%2Fbbbb",
+        "job%2Fbackend%2Fclear%5Fkv%5Fblocks%2Faaaa",
+        "job%2Fbackend%2Fgenerate%2Faaaa",
+    ):
+        (instances / name).touch()
+    result = _run_dynamo_frontend(
+        tmp_path, health_check="exit 0", script="router_registrations; echo rc=$?"
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "job%2Fbackend%2Fgenerate%2Faaaa",
+        "job%2Fbackend%2Fgenerate%2Fbbbb",
+        "rc=0",
+    ]
+
+
+def test_dynamo_registrations_print_nothing_without_a_store(tmp_path):
+    result = _run_dynamo_frontend(
+        tmp_path, health_check="exit 0", script="router_registrations; echo rc=$?"
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "rc=0\n"
+
+
+def test_a_new_dynamo_instance_changes_the_snapshot_of_an_unchanged_replica_list(tmp_path):
+    (tmp_path / "serving").mkdir()
+    (tmp_path / "serving" / "replicas.txt").write_text("n1:8000\nn2:8001\n")
+    instances = _instances(tmp_path)
+    (instances / "job%2Fbackend%2Fgenerate%2Faaaa").touch()
+    before = _snapshot(tmp_path, {"type": "dynamo"})
+
+    (instances / "job%2Fbackend%2Fgenerate%2Fcccc").touch()
+    after = _snapshot(tmp_path, {"type": "dynamo"})
+
+    assert before == "n1:8000\nn2:8001\njob%2Fbackend%2Fgenerate%2Faaaa\n"
+    assert after != before
+    assert after.startswith("n1:8000\nn2:8001\n")
+
+
+@pytest.mark.parametrize(
+    "router",
+    [
+        {"type": "nginx"},
+        {"type": "vllm-router", "binary": "vllm-router"},
+        {"type": "ramjet", "image": "/r.sif"},
+    ],
+    ids=["nginx", "vllm-router", "ramjet"],
+)
+def test_snapshot_is_the_replica_list_for_routers_without_registrations(tmp_path, router):
+    (tmp_path / "serving").mkdir()
+    (tmp_path / "serving" / "replicas.txt").write_text("n1:8000\nn2:8001\n")
+    _instances(tmp_path)
+
+    assert _snapshot(tmp_path, router) == "n1:8000\nn2:8001\n"
+
+
+def test_applier_and_initial_record_use_the_snapshot():
+    out = _render_lb({"type": "dynamo"})
+    assert 'replica_snapshot >"$HOST_DIR/run/replicas.applied"' in out
+    assert 'replica_snapshot >"$APPLIED_FILE.next"' in out
+    assert 'cmp -s "$APPLIED_FILE.next" "$APPLIED_FILE"' in out
+    assert 'cp "$REPLICAS_FILE"' not in out

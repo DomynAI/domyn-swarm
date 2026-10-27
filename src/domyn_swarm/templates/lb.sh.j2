@@ -54,7 +54,15 @@ fi
 )
 # end api key check
 {% endif %}
+# A fragment overrides this to print router state whose change needs a
+# router_apply_replicas, as a change in the replica list does.
+router_registrations() { :; }
 {% include "routers/" ~ router.type ~ ".sh.j2" %}
+
+replica_snapshot() {
+    cat "$SERVING_DIR/replicas.txt"
+    router_registrations
+}
 
 
 collector_cmd() {
@@ -104,7 +112,7 @@ singularity exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_s
   {% if cfg.backend.requires_ray %}--ray-enabled --ray-dashboard-port {{ cfg.backend.ray_dashboard_port }} --ray-port {{ cfg.backend.ray_port }} {% endif %}{% if cfg.backend.endpoint.monitoring.enabled %}--emit-targets {% if cfg.backend.endpoint.monitoring.gpu_exporter.enabled %}--emit-gpu-targets {% endif %}{% if cfg.backend.endpoint.monitoring.ray_metrics.enabled %}--emit-ray-targets {% endif %}{% endif %}{% if router.type != "nginx" %}--router-address 127.0.0.1:$ROUTER_PORT {% endif %}
 
 router_start
-cp "$SERVING_DIR/replicas.txt" "$HOST_DIR/run/replicas.applied"
+replica_snapshot >"$HOST_DIR/run/replicas.applied"
 
 CACHE_DIR="$TMPDIR/cache"
 mkdir -p "$CACHE_DIR"
@@ -196,11 +204,11 @@ REPLICAS_FILE="$SERVING_DIR/replicas.txt"
 APPLIED_FILE="$HOST_DIR/run/replicas.applied"
 (
   while true; do
-    if [ -f "$REPLICAS_FILE" ] && ! cmp -s "$REPLICAS_FILE" "$APPLIED_FILE"; then
-      # The supervisor may rewrite the list while a slow apply runs, so apply
-      # and record one snapshot. After a failure the apply has already recorded
-      # its successful calls in APPLIED_FILE, which must then stay as it is.
-      cp "$REPLICAS_FILE" "$APPLIED_FILE.next"
+    # The supervisor may rewrite the list while a slow apply runs, so apply
+    # and record one snapshot. After a failure the apply has already recorded
+    # its successful calls in APPLIED_FILE, which must then stay as it is.
+    if [ -f "$REPLICAS_FILE" ] && replica_snapshot >"$APPLIED_FILE.next" \
+        && ! cmp -s "$APPLIED_FILE.next" "$APPLIED_FILE"; then
       if router_apply_replicas "$APPLIED_FILE" "$APPLIED_FILE.next"; then
         mv "$APPLIED_FILE.next" "$APPLIED_FILE"
         echo "[lb] applied replica set to the router"
