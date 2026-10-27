@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import jinja2
 
+from domyn_swarm.config.router import NginxRouter
+
 TPL_DIR = Path("src/domyn_swarm/templates")
 
 
@@ -15,7 +17,11 @@ def _cfg(mon_enabled, gpu_enabled):
         enabled=mon_enabled, route_prefix="/prometheus", port=9090, gpu_exporter=gx
     )
     ep = SimpleNamespace(
-        port=9000, nginx_timeout="60s", enable_proxy_buffering=True, monitoring=mon
+        port=9000,
+        nginx_timeout="60s",
+        enable_proxy_buffering=True,
+        monitoring=mon,
+        router=NginxRouter(),
     )
     backend = SimpleNamespace(endpoint=ep, requires_ray=False)
     return SimpleNamespace(backend=backend)

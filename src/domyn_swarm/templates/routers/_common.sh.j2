@@ -1,0 +1,51 @@
+{#
+Macros shared by the router fragments that lb.sh.j2 includes.
+
+Every fragment routers/<type>.sh.j2 defines these shell functions:
+  router_start          - start the router in the background, set ROUTER_PID,
+                          and return once http://127.0.0.1:$ROUTER_PORT/health
+                          answers, or exit 1 after WAIT_SEC.
+  router_stop           - stop the router that router_start started. Safe to
+                          call twice.
+  router_apply_replicas APPLIED_FILE NEW_FILE
+                        - bring the router in line with the replica list in
+                          NEW_FILE (one host:port per line). APPLIED_FILE holds
+                          the replicas the router has and may be missing. A
+                          router that changes membership call by call records
+                          each successful call in APPLIED_FILE at once, so after
+                          a failure it still matches the router and the retry
+                          repeats only the failed calls. Returns non-zero when
+                          any call failed.
+A fragment that runs a router process also sets ROUTER_PORT, which lb.sh.j2
+passes to the supervisor as the nginx `llm` upstream.
+#}
+{% macro sh_quote(value) -%}
+{% set value = value | string %}
+{% if value and not (value | reject("in", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@%+=:,./-_") | list) %}
+{{ value }}
+{%- else %}
+'{{ value | replace("'", "'\\''") }}'
+{%- endif %}
+{%- endmacro %}
+
+{% macro router_exec(router, run=False) -%}
+{% if router.binary %}
+{{ sh_quote(router.binary) }}
+{%- else %}
+singularity {{ "run" if run else "exec" }} --bind "$HOST_DIR" {{ sh_quote(router.image) }}
+{%- endif %}
+{%- endmacro %}
+
+{% macro router_wait_healthy(name) %}
+    local deadline=$(( $(date +%s) + WAIT_SEC ))
+    until curl -sf --max-time 5 -o /dev/null "http://127.0.0.1:$ROUTER_PORT/health"; do
+        if ! kill -0 "$ROUTER_PID" 2>/dev/null || (( $(date +%s) > deadline )); then
+            echo "[lb] ERROR: {{ name }} did not become healthy on 127.0.0.1:$ROUTER_PORT" >&2
+            tail -n 20 "$ROUTER_LOG" >&2 2>/dev/null || true
+            router_stop
+            exit 1
+        fi
+        sleep 1
+    done
+    echo "[lb] {{ name }} listening on 127.0.0.1:$ROUTER_PORT (PID $ROUTER_PID)"
+{% endmacro %}

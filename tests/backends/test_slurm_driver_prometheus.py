@@ -5,6 +5,8 @@ from pathlib import Path
 
 import jinja2
 
+from domyn_swarm.config.router import NginxRouter
+
 TPL_DIR = Path("src/domyn_swarm/templates")
 
 
@@ -39,6 +41,7 @@ class _Cfg:
     class backend:
         class endpoint:
             port = 9000
+            router = NginxRouter()
 
     name = "swarm-x"
 
