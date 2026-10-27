@@ -22,6 +22,7 @@ from domyn_swarm.config.lepton import (
     LeptonJobConfig,
 )
 from domyn_swarm.config.pool import SwarmPoolConfig, SwarmPoolElement
+from domyn_swarm.config.router import DynamoRouter, NginxRouter, RamjetRouter, VllmRouter
 from domyn_swarm.config.settings import Settings
 from domyn_swarm.config.slurm import (
     GpuExporterConfig,
@@ -38,6 +39,10 @@ DOCUMENTED_MODELS: tuple[type[BaseModel], ...] = (
     BackendsConfig,
     SlurmConfig,
     SlurmEndpointConfig,
+    NginxRouter,
+    VllmRouter,
+    RamjetRouter,
+    DynamoRouter,
     MonitoringConfig,
     GpuExporterConfig,
     RayMetricsConfig,

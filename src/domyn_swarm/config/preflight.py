@@ -160,6 +160,23 @@ def _check(
         problems.append(PathProblem(field, resolved, "is a file, expected a directory"))
 
 
+def _check_router_paths(problems: list[PathProblem], router: Any) -> None:
+    """Check the router's image, binary, policy file and virtualenv.
+
+    The virtualenv check looks for ``pyvenv.cfg``. ``bin/python`` is often a
+    symlink to an interpreter that exists only inside the image.
+    """
+    prefix = "backend.endpoint.router"
+    _check(problems, f"{prefix}.image", getattr(router, "image", None))
+    binary = getattr(router, "binary", None)
+    if binary is not None and "/" in str(binary):
+        _check(problems, f"{prefix}.binary", binary)
+    _check(problems, f"{prefix}.policy_config", getattr(router, "policy_config", None))
+    venv = getattr(router, "venv", None)
+    if venv is not None:
+        _check(problems, f"{prefix}.venv", Path(str(venv)) / "pyvenv.cfg", kind="file")
+
+
 def check_config_paths(cfg: Any) -> list[PathProblem]:
     """Collect every unusable filesystem path a swarm config refers to.
 
@@ -186,6 +203,8 @@ def check_config_paths(cfg: Any) -> list[PathProblem]:
 
     endpoint = backend.endpoint
     _check(problems, "backend.endpoint.nginx_image", endpoint.nginx_image)
+
+    _check_router_paths(problems, endpoint.router)
 
     monitoring = endpoint.monitoring
     if monitoring.enabled and monitoring.mode == "container":
