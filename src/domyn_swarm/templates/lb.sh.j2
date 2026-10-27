@@ -34,6 +34,26 @@ COLLECTOR_READY_FILE="$HOST_DIR/run/collector.ready"
 mkdir -p "$HOST_DIR" "$SERVING_DIR" "$HOST_DIR/run" "$HOST_DIR/logs"
 
 {% set router = cfg.backend.endpoint.router %}
+{% if router.type != "nginx" %}
+# begin api key check
+LB_API_KEY="${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}"
+if [[ -n "$LB_API_KEY" && ! "$LB_API_KEY" =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then
+    echo "[lb] ERROR: the API key holds characters that the nginx check cannot match; use letters, digits and ._~+/=-" >&2
+    exit 1
+fi
+(
+    umask 077
+    if [[ -n "$LB_API_KEY" ]]; then
+        # nginx matches plain map keys case-insensitively, so use an anchored regex.
+        escaped_key="${LB_API_KEY//./\\.}"
+        escaped_key="${escaped_key//+/\\+}"
+        printf 'map $http_authorization $dswarm_authorized { "~^Bearer %s$" 1; default 0; }\n' "$escaped_key"
+    else
+        printf 'map $http_authorization $dswarm_authorized { default 1; }\n'
+    fi > "$SERVING_DIR/05-auth.conf"
+)
+# end api key check
+{% endif %}
 {% include "routers/" ~ router.type ~ ".sh.j2" %}
 
 

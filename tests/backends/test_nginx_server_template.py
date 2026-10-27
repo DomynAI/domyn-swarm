@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import jinja2
 
-from domyn_swarm.config.router import NginxRouter
+from domyn_swarm.config.router import NginxRouter, VllmRouter
 
 TPL_DIR = Path("src/domyn_swarm/templates")
 
@@ -55,3 +55,52 @@ def test_server_conf_proxies_upstream_over_http11():
     out = _render(_cfg(mon_enabled=False, gpu_enabled=False))
     assert "proxy_http_version 1.1;" in out
     assert 'proxy_set_header Connection "";' in out
+
+
+def _router_cfg(router):
+    cfg = _cfg(mon_enabled=False, gpu_enabled=False)
+    cfg.backend.endpoint.router = router
+    return cfg
+
+
+def _location_block(out: str, header: str) -> str:
+    start = out.index(header)
+    return out[start : out.index("\n  }\n", start)]
+
+
+def test_router_mode_rejects_unauthorized_requests_except_on_health():
+    out = _render(_router_cfg(VllmRouter(binary="vllm-router")))
+    assert "if ($dswarm_authorized = 0) { return 401; }" in out
+    assert "return 401" not in _location_block(out, "location = /health")
+
+
+def test_nginx_mode_has_no_authorization_check():
+    assert "return 401" not in _render(_cfg(mon_enabled=False, gpu_enabled=False))
+
+
+def test_router_mode_proxies_only_the_openai_api():
+    cfg = _cfg(mon_enabled=True, gpu_enabled=True)
+    cfg.backend.endpoint.router = VllmRouter(binary="vllm-router")
+    cfg.backend.requires_ray = True
+    out = _render(cfg)
+
+    api = _location_block(out, "location /v1/ {")
+    assert "if ($dswarm_authorized = 0) { return 401; }" in api
+    assert "proxy_pass http://llm;" in api
+    assert "proxy_read_timeout          60s;" in api
+    assert _location_block(out, "location / {") == "location / {\n    return 404;"
+    assert out.count("proxy_pass http://llm") == 2
+    for header in (
+        "location = /health {",
+        "location ^~ /ray/ {",
+        "location = /nginx_status {",
+        "location /prometheus/ {",
+        "location = /gpu_ownership {",
+    ):
+        assert header in out
+
+
+def test_nginx_mode_proxies_every_path():
+    out = _render(_cfg(mon_enabled=False, gpu_enabled=False))
+    assert "proxy_pass http://llm;" in _location_block(out, "location / {")
+    assert "location /v1/" not in out

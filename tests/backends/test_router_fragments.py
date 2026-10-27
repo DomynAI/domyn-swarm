@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2025-2026 Domyn
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
+import re
 import subprocess
 
 import jinja2
@@ -364,3 +366,98 @@ def test_rendered_lb_scripts_are_valid_bash(tmp_path):
         script = tmp_path / f"{router['type']}.sh"
         script.write_text(_render_lb(router))
         subprocess.run(["bash", "-n", str(script)], check=True)
+
+
+def _run_auth_block(
+    tmp_path: Path,
+    key: str,
+    env_name: str = "VLLM_API_KEY",
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    out = _render_lb({"type": "vllm-router", "binary": "vllm-router"})
+    start = out.index("# begin api key check")
+    end = out.index("# end api key check")
+    script = tmp_path / "auth.sh"
+    script.write_text("set -eu\n" + out[start:end])
+    (tmp_path / "serving").mkdir(exist_ok=True)
+    env = {
+        "PATH": os.environ["PATH"],
+        "SERVING_DIR": str(tmp_path / "serving"),
+        env_name: key,
+        **(extra_env or {}),
+    }
+    return subprocess.run(
+        ["bash", str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+
+def test_router_mode_writes_auth_map_and_rejects_unsafe_keys():
+    out = _render_lb({"type": "vllm-router", "binary": "vllm-router"})
+    assert "05-auth.conf" in out
+    assert "umask 077" in out
+    assert "^[A-Za-z0-9._~+/=-]+$" in out
+
+
+def test_nginx_mode_writes_no_auth_map():
+    assert "05-auth.conf" not in _render_lb({"type": "nginx"})
+
+
+@pytest.mark.parametrize("key", ['ab"cd', "ab$cd", "ab cd", "ab;cd", "ab}cd", "ab\\cd"])
+def test_unsafe_api_key_stops_the_job(tmp_path, key):
+    result = _run_auth_block(tmp_path, key)
+    assert result.returncode == 1
+    assert "API key holds characters" in result.stderr
+    assert not (tmp_path / "serving" / "05-auth.conf").exists()
+
+
+def test_safe_api_key_writes_bearer_map(tmp_path):
+    result = _run_auth_block(tmp_path, "sk-abc.DEF_123")
+    assert result.returncode == 0
+    conf = tmp_path / "serving" / "05-auth.conf"
+    assert '"~^Bearer sk-abc\\.DEF_123$" 1;' in conf.read_text()
+    assert conf.stat().st_mode & 0o077 == 0
+
+
+def test_empty_api_key_writes_open_map(tmp_path):
+    result = _run_auth_block(tmp_path, "")
+    assert result.returncode == 0
+    text = (tmp_path / "serving" / "05-auth.conf").read_text()
+    assert "default 1;" in text
+    assert "Bearer" not in text
+
+
+def _written_pattern(tmp_path: Path) -> str:
+    text = (tmp_path / "serving" / "05-auth.conf").read_text()
+    return re.search(r'"~(.*?)" 1;', text).group(1)
+
+
+@pytest.mark.parametrize(
+    ("key", "accepted", "rejected"),
+    [
+        (
+            "sk-abc.DEF_123",
+            ["Bearer sk-abc.DEF_123"],
+            [
+                "bearer SK-ABC.def_123",
+                "Bearer sk-abcXDEF_123",
+                "Bearer sk-abc.DEF_1234",
+                "Bearer sk-abc.DEF_12",
+            ],
+        ),
+        ("a+b.c", ["Bearer a+b.c"], ["Bearer aab.c", "Bearer aaab.c", "bearer a+b.c"]),
+    ],
+)
+def test_bearer_pattern_matches_only_the_exact_key(tmp_path, key, accepted, rejected):
+    _run_auth_block(tmp_path, key)
+    pattern = _written_pattern(tmp_path)
+    assert all(re.search(pattern, value) for value in accepted)
+    assert not any(re.search(pattern, value) for value in rejected)
+
+
+def test_singularity_env_key_wins_over_vllm_api_key(tmp_path):
+    _run_auth_block(
+        tmp_path, "from-singularity", "SINGULARITYENV_VLLM_API_KEY", {"VLLM_API_KEY": "from-vllm"}
+    )
+    text = (tmp_path / "serving" / "05-auth.conf").read_text()
+    assert "from-singularity" in text
+    assert "from-vllm" not in text

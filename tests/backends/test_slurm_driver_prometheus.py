@@ -5,7 +5,7 @@ from pathlib import Path
 
 import jinja2
 
-from domyn_swarm.config.router import NginxRouter
+from domyn_swarm.config.router import NginxRouter, VllmRouter
 
 TPL_DIR = Path("src/domyn_swarm/templates")
 
@@ -83,3 +83,26 @@ def test_prometheus_ray_job_absent_when_disabled():
         cfg=_Cfg(),
     )
     assert "job_name: ray" not in out
+
+
+def _router_job(router):
+    cfg = _Cfg()
+    cfg.backend.endpoint.router = router
+    return _render(
+        monitoring=_Mon(False),
+        targets_path="/t.json",
+        gpu_targets_path="/g.json",
+        cfg=cfg,
+        router_metrics=router.metrics_target(),
+    )
+
+
+def test_prometheus_router_job_present_for_vllm_router():
+    out = _router_job(VllmRouter(binary="vllm-router"))
+    assert "job_name: router" in out
+    assert "127.0.0.1:9201" in out
+    assert "metrics_path: /metrics" in out.split("job_name: router")[1].split("job_name")[0]
+
+
+def test_prometheus_router_job_absent_for_nginx():
+    assert "job_name: router" not in _router_job(NginxRouter())

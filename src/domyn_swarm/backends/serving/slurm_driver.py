@@ -142,6 +142,7 @@ class SlurmDriver:
                 targets_path=targets_path,
                 gpu_targets_path=gpu_targets_path,
                 ray_targets_path=ray_targets_path,
+                router_metrics=self.cfg.backend.endpoint.router.metrics_target(),
                 cfg=self.cfg,
             )
             (serving_dir / "prometheus.yml").write_text(prom_yml)
