@@ -7,7 +7,7 @@ import subprocess
 import jinja2
 import pytest
 
-from domyn_swarm.config.router import VllmRouter
+from domyn_swarm.config.router import RamjetRouter, VllmRouter
 from domyn_swarm.config.swarm import DomynLLMSwarmConfig
 
 TPL_DIR = Path(__file__).resolve().parents[2] / "src" / "domyn_swarm" / "templates"
@@ -108,6 +108,11 @@ def _apply_pass(
             f"router_apply_replicas {applied} {new_file}",
         ],
     ).returncode
+
+
+def _function_body(script: str, name: str) -> str:
+    start = script.index(f"{name}() {{\n") + len(f"{name}() {{\n")
+    return script[start : script.index("\n}\n", start)]
 
 
 def _curl_calls(tmp_path: Path) -> list[str]:
@@ -297,8 +302,65 @@ def test_vllm_router_apply_creates_a_missing_record(tmp_path):
     assert applied.read_text().splitlines() == ["n1:8000"]
 
 
+def test_ramjet_image_uses_singularity_run_and_rj_env():
+    out = _render_lb({"type": "ramjet", "image": "/img/ramjet.sif"})
+    assert 'singularity run --bind "$HOST_DIR" /img/ramjet.sif' in out
+    assert "RJ_API_ADDR=127.0.0.1:$ROUTER_PORT" in out
+    assert "RJ_METRICS_ADDR=127.0.0.1:9201" in out
+    assert "RJ_AFFINITY=prefix" in out
+
+
+def test_ramjet_apply_restarts_the_router():
+    out = _render_lb({"type": "ramjet", "image": "/r.sif"})
+    body = _function_body(out, "router_apply_replicas")
+    assert body.index("router_stop") < body.index("router_start")
+
+
+def test_ramjet_apply_returns_non_zero_when_the_router_never_gets_healthy(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    router_bin = bin_dir / "fake-router"
+    router_bin.write_text("#!/bin/bash\nexec sleep 30\n")
+    router_bin.chmod(0o755)
+    curl = bin_dir / "curl"
+    curl.write_text("#!/bin/bash\nexit 7\n")
+    curl.chmod(0o755)
+    for name in ("logs", "run", "serving"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "serving" / "replicas.txt").write_text("n1:8000\n")
+    fragment = tmp_path / "router.sh"
+    fragment.write_text(
+        _env()
+        .get_template("routers/ramjet.sh.j2")
+        .render(router=RamjetRouter(binary=str(router_bin)))
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euc",
+            f'PATH="{bin_dir}:$PATH"; HOST_DIR={tmp_path}; SERVING_DIR={tmp_path}/serving; '
+            f"WAIT_SEC=1; source {fragment}; "
+            "if router_apply_replicas /dev/null /dev/null; then echo applied; "
+            'else echo "failed rc=$?"; fi; echo still-running',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["failed rc=1", "still-running"]
+    assert "ramjet did not become healthy" in result.stderr
+    assert not (tmp_path / "run" / "router.pid").exists()
+
+
 def test_rendered_lb_scripts_are_valid_bash(tmp_path):
-    for router in ({"type": "nginx"}, {"type": "vllm-router", "image": "/img/vr.sif"}):
+    for router in (
+        {"type": "nginx"},
+        {"type": "vllm-router", "image": "/img/vr.sif"},
+        {"type": "ramjet", "image": "/img/ramjet.sif"},
+    ):
         script = tmp_path / f"{router['type']}.sh"
         script.write_text(_render_lb(router))
         subprocess.run(["bash", "-n", str(script)], check=True)
