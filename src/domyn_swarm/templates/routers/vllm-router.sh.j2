@@ -1,6 +1,7 @@
-{% from "routers/_common.sh.j2" import router_exec, router_wait_healthy, sh_quote %}
+{% from "routers/_common.sh.j2" import router_exec, router_stop_from_pid_file, router_wait_healthy, sh_quote %}
 ROUTER_PORT={{ router.port }}
 ROUTER_LOG="$HOST_DIR/logs/router.log"
+ROUTER_PID_FILE="$HOST_DIR/run/router.pid"
 
 router_start() {
     local -a worker_urls
@@ -17,15 +18,11 @@ router_start() {
             >>"$ROUTER_LOG" 2>&1
     ) &
     ROUTER_PID=$!
+    echo "$ROUTER_PID" >"$ROUTER_PID_FILE"
 {{ router_wait_healthy("vllm-router") -}}
 }
 
-router_stop() {
-    if [ -n "${ROUTER_PID:-}" ]; then
-        kill "$ROUTER_PID" 2>/dev/null || true
-        ROUTER_PID=""
-    fi
-}
+{{ router_stop_from_pid_file() }}
 
 # Prints the response body, a newline, and the HTTP status (000 when curl fails).
 router_post() {

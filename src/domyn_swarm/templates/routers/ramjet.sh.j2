@@ -25,5 +25,5 @@ router_start() {
 {{ router_wait_healthy("ramjet") -}}
 }
 
-# Ramjet reads its upstream list only at start, so any change restarts it.
+# ramjet reads its upstream list only at start, so any change restarts it.
 {{ restart_on_replica_change() }}

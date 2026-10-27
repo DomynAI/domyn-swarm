@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 import jinja2
@@ -164,8 +165,8 @@ def _run_start(tmp_path: Path, router_body: str, health_check: str) -> subproces
     curl = bin_dir / "curl"
     curl.write_text(f"#!/bin/bash\n{health_check}\n")
     curl.chmod(0o755)
-    (tmp_path / "logs").mkdir()
-    (tmp_path / "serving").mkdir()
+    for name in ("logs", "run", "serving"):
+        (tmp_path / name).mkdir()
     (tmp_path / "serving" / "replicas.txt").write_text("n1:8000\nn2:8001\n")
     fragment = tmp_path / "router.sh"
     fragment.write_text(
@@ -179,7 +180,7 @@ def _run_start(tmp_path: Path, router_body: str, health_check: str) -> subproces
             "-euc",
             f'PATH="{bin_dir}:$PATH"; HOST_DIR={tmp_path}; SERVING_DIR={tmp_path}/serving; '
             f"WAIT_SEC=5; source {fragment}; router_start; "
-            'kill -0 "$ROUTER_PID"; router_stop; router_stop',
+            'kill -0 "$(cat "$ROUTER_PID_FILE")"; router_stop; router_stop',
         ],
         capture_output=True,
         text=True,
@@ -201,6 +202,7 @@ def test_vllm_router_start_passes_replicas_and_env(tmp_path):
         "http://n2:8001",
     ]
     assert "--api-key" not in argv
+    assert not (tmp_path / "run" / "router.pid").exists()
 
 
 def test_vllm_router_start_exits_when_the_router_dies(tmp_path):
@@ -235,6 +237,29 @@ def test_router_starts_before_nginx_and_stops_on_exit():
     out = _render_lb({"type": "vllm-router", "binary": "vllm-router"})
     assert out.index("router_start") < out.index("singularity instance start")
     assert "router_stop" in out.split("trap", 1)[1]
+
+
+def test_shutdown_stops_the_applier_before_the_router():
+    out = _render_lb({"type": "ramjet", "binary": "ramjet"})
+    shutdown = out[out.rindex("trap '") :]
+    assert shutdown.index("kill ${APPLY_PID:-}") < shutdown.index("router_stop")
+
+
+def test_shutdown_stops_the_router_when_the_applier_already_exited(tmp_path):
+    out = _render_lb({"type": "ramjet", "binary": "ramjet"})
+    shutdown = re.search(r"^trap '(echo \"\[lb\] shutting down\";.*)' EXIT SIGTERM$", out, re.M)
+    assert shutdown is not None
+    stopped = tmp_path / "stopped"
+    script = f"""
+set -eu
+router_stop() {{ touch {stopped}; }}
+singularity() {{ :; }}
+APPLY_PID=$(sh -c 'echo $$')
+COLLECTOR_PID=$APPLY_PID SUPERVISOR_PID=$APPLY_PID INSTANCE_NAME=lb
+{shutdown.group(1)}
+"""
+    subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert stopped.exists()
 
 
 def test_vllm_router_passes_both_supervisor_runs_the_router_address():
@@ -806,3 +831,133 @@ def test_applier_and_initial_record_use_the_snapshot():
     assert 'replica_snapshot >"$APPLIED_FILE.next"' in out
     assert 'cmp -s "$APPLIED_FILE.next" "$APPLIED_FILE"' in out
     assert 'cp "$REPLICAS_FILE"' not in out
+
+
+def _run_applier(
+    tmp_path: Path,
+    router: dict,
+    router_body: str,
+    script: str,
+    stubs: dict[str, str] | None = None,
+):
+    """Run `script` with the router fragment, `replica_snapshot` and `applier_pass` sourced.
+
+    `router_body` runs as the router process, both for a `binary` router and,
+    through a stub `singularity`, for Dynamo. The stub `curl` reports the router
+    healthy at once. `stubs` adds more commands to PATH, by name and body.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    commands = {"fake-router": router_body, "singularity": router_body, "curl": "exit 0"}
+    for name, body in {**commands, **(stubs or {})}.items():
+        (bin_dir / name).write_text(f"#!/bin/bash\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    for name in ("logs", "run", "serving"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "serving" / "replicas.txt").write_text("n1:8000\nn2:8001\n")
+    if router["type"] != "dynamo":
+        router = {**router, "binary": str(bin_dir / "fake-router")}
+    out = _render_lb(router)
+    fragment = out[out.index("router_registrations() { :; }") : out.index("replica_snapshot() {")]
+    functions = "".join(
+        f"{name}() {{\n{_function_body(out, name)}\n}}\n"
+        for name in ("replica_snapshot", "applier_pass")
+    )
+    lib = tmp_path / "applier.sh"
+    lib.write_text(fragment + functions)
+    return subprocess.run(
+        [
+            "bash",
+            "-euc",
+            f'PATH="{bin_dir}:$PATH"; HOST_DIR={tmp_path}; SERVING_DIR={tmp_path}/serving; '
+            "WAIT_SEC=5; REPLICAS_FILE=$SERVING_DIR/replicas.txt; "
+            f"APPLIED_FILE=$HOST_DIR/run/replicas.applied; source {lib}; {script}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize("router_type", ["vllm-router", "ramjet", "dynamo"])
+def test_applier_restarts_a_router_that_exited(tmp_path, router_type):
+    starts = tmp_path / "starts"
+    result = _run_applier(
+        tmp_path,
+        {"type": router_type},
+        router_body=(
+            f'echo start >> {starts}\n[ "$(wc -l < {starts})" -ge 2 ] && exec sleep 30\nexit 0'
+        ),
+        script=(
+            'router_start; pid="$(cat "$ROUTER_PID_FILE")"; '
+            'for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done; '
+            "echo n3:8002 >> $REPLICAS_FILE; applier_pass; "
+            'kill -0 "$(cat "$ROUTER_PID_FILE")"; router_stop'
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert starts.read_text().splitlines() == ["start", "start"]
+    assert f"[lb] WARNING: {router_type} exited; restarting" in result.stderr
+    assert (tmp_path / "run" / "replicas.applied").read_text() == "n1:8000\nn2:8001\nn3:8002\n"
+    assert not (tmp_path / "run" / "router.pid").exists()
+
+
+def test_applier_leaves_a_live_router_running(tmp_path):
+    starts = tmp_path / "starts"
+    result = _run_applier(
+        tmp_path,
+        {"type": "ramjet"},
+        router_body=f"echo start >> {starts}\nexec sleep 30",
+        script=(
+            "router_start; replica_snapshot > $APPLIED_FILE; applier_pass; "
+            'kill -0 "$(cat "$ROUTER_PID_FILE")"; router_stop'
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert starts.read_text().splitlines() == ["start"]
+    assert "exited" not in result.stderr
+
+
+def test_nginx_applier_does_not_watch_a_router_process():
+    body = _function_body(_render_lb({"type": "nginx"}), "applier_pass")
+    assert "ROUTER_PID_FILE" not in body
+    assert "router_start" not in body
+
+
+def test_nginx_applier_does_not_report_a_router_apply():
+    assert "applied replica set" not in _render_lb({"type": "nginx"})
+    assert "applied replica set to the router" in _render_lb({"type": "ramjet", "binary": "r"})
+
+
+@pytest.mark.parametrize("router_type", ["vllm-router", "ramjet", "dynamo"])
+def test_initial_snapshot_is_recorded_before_the_first_router_start(router_type):
+    router = {"type": router_type}
+    if router_type != "dynamo":
+        router["binary"] = router_type
+    out = _render_lb(router)
+    assert out.index('replica_snapshot >"$HOST_DIR/run/replicas.applied"') < out.index(
+        "\nrouter_start\n"
+    )
+
+
+@pytest.mark.parametrize("router_type", ["vllm-router", "ramjet", "dynamo"])
+def test_router_stop_kills_a_router_that_ignores_sigterm(tmp_path, router_type):
+    real_sleep = shutil.which("sleep")
+    result = _run_applier(
+        tmp_path,
+        {"type": router_type},
+        router_body=f"trap '' TERM\nexec {real_sleep} 30",
+        script=(
+            'router_start; pid="$(cat "$ROUTER_PID_FILE")"; router_stop; '
+            f'for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; {real_sleep} 0.1; done; '
+            'if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid"; echo alive; '
+            "else echo stopped; fi"
+        ),
+        stubs={"sleep": "exit 0"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == "stopped"
+    assert not (tmp_path / "run" / "router.pid").exists()
