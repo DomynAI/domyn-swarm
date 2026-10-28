@@ -375,7 +375,7 @@ def _build_status_json(
 
     Schema is a public contract — change with care.
     """
-    from datetime import timezone
+    from datetime import UTC
 
     from ..platform.protocols import ServingPhase
 
@@ -431,9 +431,7 @@ def _build_status_json(
 
     if creation_dt is not None:
         started_at = (
-            creation_dt
-            if creation_dt.tzinfo is not None
-            else creation_dt.replace(tzinfo=timezone.utc)
+            creation_dt if creation_dt.tzinfo is not None else creation_dt.replace(tzinfo=UTC)
         )
         started_at_iso = started_at.isoformat()
 

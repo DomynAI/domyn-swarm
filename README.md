@@ -11,7 +11,7 @@ workflow. vLLM handles inference. domyn-swarm manages replicas, load balancing, 
 [![Documentation](https://img.shields.io/badge/docs-latest-blue)](https://domynswarm.domyn.com/)
 [![CI](https://github.com/DomynAI/domyn-swarm/actions/workflows/ci.yaml/badge.svg)](https://github.com/DomynAI/domyn-swarm/actions/workflows/ci.yaml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/DomynAI/domyn-swarm/badges/coverage.json)](https://github.com/DomynAI/domyn-swarm/actions/workflows/ci.yaml)
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-brightgreen)](https://github.com/DomynAI/domyn-swarm/blob/main/pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-brightgreen)](https://github.com/DomynAI/domyn-swarm/blob/main/pyproject.toml)
 [![License - Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Pyright](https://microsoft.github.io/pyright/img/pyright_badge.svg)](https://github.com/microsoft/pyright)

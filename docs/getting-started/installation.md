@@ -1,6 +1,6 @@
 # Installation
 
-domyn-swarm needs Python 3.10 or newer.
+domyn-swarm needs Python 3.11 or newer.
 
 ## From PyPI
 
