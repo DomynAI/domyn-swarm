@@ -18,7 +18,7 @@ or preserves.
 
 ## Development setup
 
-Domyn Swarm supports Python `>=3.10,<3.14` on Linux. Install
+Domyn Swarm supports Python `>=3.11,<3.15` on Linux. Install
 [uv](https://docs.astral.sh/uv/), clone the repository, and synchronize the
 development environment:
 

@@ -3,13 +3,12 @@ name = "domyn-swarm"
 version = "0.34.0"
 description = "CLI and programmatic API to launch LLM inference endpoints on Slurm, using simple configuration files"
 readme = "README.md"
-requires-python = ">=3.10,<3.15"
+requires-python = ">=3.11,<3.15"
 license = { text = "Apache-2.0" }
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -56,7 +55,6 @@ dependencies = [
     "rich>=14.0.0,<15",
     "tenacity>=9.0.0,<10",
     "typer>=0.16.0",
-    "tomli>=2.0.1; python_version < '3.11'",
     "deprecated>=1.2.18",
     "python-ulid[pydantic]>=3.1.0",
     "sqlalchemy>=2.0.44",
@@ -81,12 +79,12 @@ dev = [
 ]
 linting = ["pre-commit", "ruff>=0.11.13"]
 docs = [
-    "sphinx>=8.2,<10; python_version >= '3.11'",
-    "myst-parser>=5.1; python_version >= '3.11'",
-    "pydata-sphinx-theme>=0.20; python_version >= '3.11'",
-    "sphinx-design>=0.7; python_version >= '3.11'",
-    "sphinx-copybutton>=0.5; python_version >= '3.11'",
-    "sphinx-click>=6.2; python_version >= '3.11'",
+    "sphinx>=8.2,<10",
+    "myst-parser>=5.1",
+    "pydata-sphinx-theme>=0.20",
+    "sphinx-design>=0.7",
+    "sphinx-copybutton>=0.5",
+    "sphinx-click>=6.2",
 ]
 bench = [
     "datasets>=4.8.5",
@@ -137,9 +135,14 @@ all = [
 # leptonai also caps anyio at <=4.9.0, which blocks the fixes for the TLSStream
 # IDNA hostname spoofing and process-pool stderr deadlock advisories. The API
 # client imports leptonai.util, which only uses stable anyio 4 APIs.
+#
+# vllm caps setuptools at <81, which blocks the fix for the legacy wheel
+# namespace_packages.txt path escape advisory. vllm and torch are the only
+# packages that pull setuptools, and both come in through the bench group.
 override-dependencies = [
     "anyio>=4.14.2,<5",
     "prometheus-fastapi-instrumentator>=8.0.0",
+    "setuptools>=84.1.0",
 ]
 
 [tool.commitizen]
@@ -167,7 +170,7 @@ include = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 src = ["src"]
 include = ["pyproject.toml", "src/**/*.py", "docs/**/*.py", "tests/**/*.py"]
@@ -188,7 +191,7 @@ docstring-code-format = true
 # - E,F,W: pycodestyle/pyflakes (core correctness)
 # - I: import sorting
 # - B: bugbear (real bugs & footguns)
-# - UP: safe pyupgrade for py310
+# - UP: safe pyupgrade for py311
 # - SIM: gentle simplifications
 # - PERF: low-risk performance lint
 # - C90: mccabe complexity (C901)
@@ -202,6 +205,8 @@ ignore = [
   # zip(strict=…) is great, but this is often too pushy for general codebases.
   "B905",
   "B008",
+  # StrEnum changes str() of members, which feeds CLI output and persisted state.
+  "UP042",
 ]
 
 [tool.ruff.lint.isort]
