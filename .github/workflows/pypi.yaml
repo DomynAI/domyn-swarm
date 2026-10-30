@@ -1,0 +1,104 @@
+name: PyPI
+
+# A version tag publishes to PyPI. A manual run publishes a uniquely numbered
+# dev build to TestPyPI, so the whole path can be rehearsed without a release.
+#
+# Both indexes authenticate this workflow through trusted publishing (OIDC), so
+# no API token is stored in the repository. Each index needs a trusted
+# publisher with these values, added as a "pending publisher" until the
+# project exists there:
+#
+#   owner: DomynAI    repository: domyn-swarm    workflow: pypi.yaml
+#   environment: pypi (on pypi.org) or testpypi (on test.pypi.org)
+#
+# The publisher names this file, so renaming it breaks publishing until the
+# PyPI settings follow. The GitHub environments of the same names hold any
+# approval rule for a release. The publish action also signs a PEP 740
+# attestation for each file, so the index shows which workflow run built it.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# An upload that is cancelled halfway can leave a release with only some of
+# its files, and PyPI never accepts a file name twice, so queue instead.
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        run: pipx install uv==0.12.23
+
+      - name: Verify tag matches version
+        if: github.event_name == 'push'
+        run: |
+          VERSION="$(uv version --short)"
+          if [ "$VERSION" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "Tag ($GITHUB_REF_NAME) != pyproject version ($VERSION)"
+            exit 3
+          fi
+
+      - name: Give the TestPyPI build a unique dev version
+        if: github.event_name == 'workflow_dispatch'
+        run: uv version --frozen "$(uv version --short).dev${GITHUB_RUN_NUMBER}"
+
+      # --no-sources builds with the published dependencies only, as an
+      # installer from PyPI would.
+      - name: Build the sdist and wheel
+        run: uv build --no-sources
+
+      - name: Smoke-test the wheel outside the project
+        run: uv run --isolated --no-project --python 3.12 --with dist/*.whl domyn-swarm --help
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/domyn-swarm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    if: github.event_name == 'push'
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/domyn-swarm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
