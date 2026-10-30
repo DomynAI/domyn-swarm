@@ -1,0 +1,3 @@
+     {% if 'tensor-parallel-size' not in cfg.args %}
+     --tensor-parallel-size {{ [cfg.gpus_per_replica,cfg.gpus_per_node] | min  }} \
+     {% endif %}

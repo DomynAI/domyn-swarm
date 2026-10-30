@@ -1,0 +1,41 @@
+{% from "routers/_common.sh.j2" import restart_on_replica_change, router_wait_healthy, sh_quote %}
+{% set binds = [router.venv, router.resolved_policy_config()] | reject("none") %}
+ROUTER_PORT={{ router.port }}
+ROUTER_LOG="$HOST_DIR/logs/router.log"
+ROUTER_PID_FILE="$HOST_DIR/run/router.pid"
+
+# The frontend serves its metrics on the HTTP port. A DYN_SYSTEM_PORT inherited
+# from the submitting shell would make it open a second server on that port.
+router_start() {
+    mkdir -p "$HOST_DIR/dynamo-kv"
+    (
+        export PYTHONHASHSEED=0
+        export DYN_FILE_KV="$HOST_DIR/dynamo-kv"
+        export DYN_IGNORE_OPENAI_FE_UNSUPPORTED_FIELDS=1
+{% for key, value in router.env.items() %}
+        export {{ key }}={{ sh_quote(value) }}
+{% endfor %}
+        exec env -u DYN_SYSTEM_PORT singularity exec --bind "$HOST_DIR"{% for path in binds %},{{ sh_quote(path) }}{% endfor %} {{ sh_quote(cfg.image) }} \
+            {{ sh_quote(router.venv ~ "/bin/python") if router.venv else "python3" }} -m dynamo.frontend --http-host 127.0.0.1 --http-port $ROUTER_PORT \
+            --namespace {{ job_name }} \
+            --discovery-backend file --request-plane tcp --event-plane zmq \
+            {%+ for arg in router.frontend_args() + router.args %}{{ sh_quote(arg) }} {% endfor %}\
+            >>"$ROUTER_LOG" 2>&1
+    ) &
+    ROUTER_PID=$!
+    echo "$ROUTER_PID" >"$ROUTER_PID_FILE"
+{{ router_wait_healthy("dynamo frontend") -}}
+}
+
+# A worker that the watchdog restarts keeps its host:port but registers a new
+# instance, so its generate registrations also count as a membership change.
+router_registrations() {
+    local dir="$HOST_DIR/dynamo-kv/v1/instances"
+    [ -d "$dir" ] || return 0
+    find "$dir" -mindepth 1 -maxdepth 1 -name '*%2Fgenerate%2F*' -printf '%f\n' | LC_ALL=C sort
+}
+
+# File discovery watches the store with inotify, which misses registrations
+# written on other nodes, so any change restarts the frontend to read the full
+# worker set.
+{{ restart_on_replica_change() }}

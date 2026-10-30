@@ -1,0 +1,14 @@
+# vllm-router for `backend.endpoint.router` with `type: vllm-router`.
+# Build: sudo singularity build vllm-router_0.1.16.sif vllm-router.def
+# Domyn Swarm runs `vllm-router` from PATH inside the image.
+Bootstrap: docker
+From: python:3.12-slim
+
+%post
+    python3 -m pip install --no-cache-dir --disable-pip-version-check vllm-router==0.1.16
+
+%labels
+    Version 0.1.16
+
+%runscript
+    exec vllm-router "$@"

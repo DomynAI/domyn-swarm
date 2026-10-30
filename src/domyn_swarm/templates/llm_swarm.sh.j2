@@ -28,31 +28,7 @@ function start_vllm_replica() {
      bash -lc 'nvidia-smi --query-gpu=uuid --format=csv,noheader \
        > "{{ swarm_directory }}/serving/gpu-owner-'"$global_id"'.txt"' 2>/dev/null || true
 {% endif %}
-  srun --export=ALL -n1 -N1 -w $node --gres=gpu:{{ cfg.gpus_per_replica }} \
-     --cpus-per-task={{ cfg.cpus_per_task }} \
-     singularity exec --bind $MOUNTS --nv --writable-tmpfs "$VLLM_IMAGE" \
-{% if cfg.watchdog is not defined or cfg.watchdog.enabled %}
-     python3 /opt/watchdog.py \
-      {{ args_to_str(build_watchdog_args(
-        cfg.watchdog,
-        swarm_id=job_name,
-        replica_id="$global_id",
-        node="$node",
-        port="$port",
-        log_dir="$log_dir",
-        collector_address="$COLLECTOR_HOST:$COLLECTOR_PORT",
-        agent_version="$DSWARM_AGENT_VERSION",
-        ray_enabled=False
-      )) }} \
-      -- \
-{% endif %}
-     vllm serve {{ cfg.model }} \
-     {% if 'tensor-parallel-size' not in cfg.args %}
-     --tensor-parallel-size {{ [cfg.gpus_per_replica,cfg.gpus_per_node] | min  }} \
-     {% endif %}
-     {{ cfg.args }} \
-     --port $port \
-     >> "$log_dir/vllm.log" 2>&1 &
+{% include "serve/" ~ cfg.backend.endpoint.router.serve_engine ~ ".sh.j2" +%}
 }
 
 function wait_for_vllm_ready() {

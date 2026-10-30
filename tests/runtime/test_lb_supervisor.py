@@ -336,3 +336,44 @@ def test_parse_args_emit_ray_targets_flag():
 
     opts, _once, _interval = lbs.parse_args(["--serving-dir", "/srv", "--emit-ray-targets"])
     assert opts.emit_ray_targets is True
+
+
+def test_render_replicas_orders_by_replica_id(tmp_path: Path):
+    _write_heads(tmp_path, {1: "n2:8001", 0: "n1:8000"})
+    assert lbs.render_replicas(tmp_path) == "n1:8000\nn2:8001\n"
+
+
+def test_render_replicas_empty_without_head_files(tmp_path: Path):
+    assert lbs.render_replicas(tmp_path) == ""
+
+
+def test_upstreams_point_at_router_when_address_given(tmp_path: Path):
+    _write_heads(tmp_path, {0: "n1:8000"})
+    conf = render_upstreams(
+        tmp_path,
+        ray_enabled=False,
+        ray_dashboard_port=8265,
+        ray_port=6379,
+        upstream_keepalive=32,
+        router_address="127.0.0.1:9200",
+    )
+    assert "server 127.0.0.1:9200;" in conf
+    assert "n1:8000" not in conf
+    assert "least_conn" not in conf
+    assert "max_fails" not in conf
+    assert "keepalive 32;" in conf
+
+
+def test_reconcile_writes_replicas_file(tmp_path: Path):
+    _write_heads(tmp_path, {0: "n1:8000"})
+    lbs.reconcile_once(
+        lbs.SupervisorOptions(
+            serving_dir=tmp_path, ray_enabled=False, ray_dashboard_port=8265, ray_port=6379
+        )
+    )
+    assert (tmp_path / "replicas.txt").read_text() == "n1:8000\n"
+
+
+def test_parse_args_router_address():
+    opts, _, _ = lbs.parse_args(["--serving-dir", "/s", "--router-address", "127.0.0.1:9200"])
+    assert opts.router_address == "127.0.0.1:9200"

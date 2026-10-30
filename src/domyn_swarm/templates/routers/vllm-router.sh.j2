@@ -1,0 +1,58 @@
+{% from "routers/_common.sh.j2" import router_exec, router_stop_from_pid_file, router_wait_healthy, sh_quote %}
+ROUTER_PORT={{ router.port }}
+ROUTER_LOG="$HOST_DIR/logs/router.log"
+ROUTER_PID_FILE="$HOST_DIR/run/router.pid"
+
+router_start() {
+    local -a worker_urls
+    mapfile -t worker_urls < <(sed 's|^|http://|' "$SERVING_DIR/replicas.txt")
+    (
+{% for key, value in router.env.items() %}
+        export {{ key }}={{ sh_quote(value) }}
+{% endfor %}
+        exec {{ router_exec(router) }}{% if router.image %} vllm-router{% endif %} --host 127.0.0.1 --port $ROUTER_PORT \
+            --worker-urls "${worker_urls[@]}" \
+            --prometheus-host 127.0.0.1 --prometheus-port {{ router.metrics_port }} \
+            {%+ for arg in router.policy_args() + router.args %}{{ sh_quote(arg) }} {% endfor %}\
+            ${LB_API_KEY:+--api-key "$LB_API_KEY"} \
+            >>"$ROUTER_LOG" 2>&1
+    ) &
+    ROUTER_PID=$!
+    echo "$ROUTER_PID" >"$ROUTER_PID_FILE"
+{{ router_wait_healthy("vllm-router") -}}
+}
+
+{{ router_stop_from_pid_file() }}
+
+# Prints the response body, a newline, and the HTTP status (000 when curl fails).
+router_post() {
+    curl -s --max-time "$1" -X POST -w '\n%{http_code}' "http://127.0.0.1:$ROUTER_PORT/$2" || true
+}
+
+# add_worker blocks until the router has health-checked the worker, so its
+# timeout leaves room for that wait. A timed-out add can still complete inside
+# the router, which then answers the retry with 400 "already exists".
+router_apply_replicas() {
+    local applied="$1" new="$2" addr reply failed=0
+    touch "$applied"
+    for addr in $(grep -vxFf "$new" "$applied"); do
+        reply="$(router_post 30 "remove_worker?url=http://$addr")"
+        if [[ "${reply##*$'\n'}" == 2?? ]]; then
+            { grep -vxF "$addr" "$applied" || true; } >"$applied.tmp"
+            mv "$applied.tmp" "$applied"
+        else
+            echo "[lb] WARNING: vllm-router remove_worker $addr failed: $reply" >&2
+            failed=1
+        fi
+    done
+    for addr in $(grep -vxFf "$applied" "$new"); do
+        reply="$(router_post 120 "add_worker?url=http://$addr")"
+        if [[ "${reply##*$'\n'}" == 2?? || ( "${reply##*$'\n'}" == 400 && "$reply" == *"already exists"* ) ]]; then
+            echo "$addr" >>"$applied"
+        else
+            echo "[lb] WARNING: vllm-router add_worker $addr failed: $reply" >&2
+            failed=1
+        fi
+    done
+    return "$failed"
+}

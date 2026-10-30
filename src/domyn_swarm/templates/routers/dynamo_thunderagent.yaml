@@ -1,0 +1,11 @@
+# Dynamo router policy for the `thunderagent` policy (Dynamo 1.6.0 or later).
+# The ThunderAgent classifier keys programs on the request's session ID and
+# defers turns under KV pressure; its worker selector ranks on load only and
+# follows the classifier's or the soft session binding's preferred worker.
+request_classifier:
+  type: thunderagent
+worker_selection:
+  aggregated: thunderagent
+  instances:
+    - name: thunderagent
+      type: thunderagent

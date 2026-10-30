@@ -15,8 +15,8 @@ domyn-swarm up -c config.yaml --replicas 3
 Three things happen:
 
 1. An array job starts one vLLM server per replica.
-2. A load-balancer job starts Nginx. Nginx waits for every replica before it
-   exposes one endpoint.
+2. A load-balancer job starts Nginx and the configured router. Nginx waits for
+   every replica before it exposes one endpoint.
 3. A SQLite state record lets later commands address the swarm by name.
 
 ## Building the Singularity images
@@ -53,6 +53,9 @@ Practical notes:
   copy the `.sif` onto the shared filesystem.
 - `image` is optional if you run vLLM from a virtual environment instead of a
   container. `endpoint.nginx_image` is always required.
+- The same directory holds recipes for the optional routers: `vllm-router.def`,
+  `ramjet.def`, and `vllm-dynamo.def`. See
+  [Load balancing and routers](load-balancing.md).
 
 ## Path validation before submission
 
@@ -73,7 +76,9 @@ The hint names the deepest path segment that exists. In this example, `images`
 is missing. The command lists every invalid path and exits with status 2.
 
 Checked: `image`, `model`, `endpoint.nginx_image`, the monitoring sidecar
-images (container mode only), `mounts` sources and `venv_path`. Images can be a
+images (container mode only), `mounts` sources and `venv_path`. For routers,
+validation also covers `endpoint.router.image`, a `binary` given as a path,
+`policy_config`, and `pyvenv.cfg` in a Dynamo `venv`. Images can be a
 `.sif` or a Singularity sandbox directory.
 
 The preflight validation skips values that the submit host cannot resolve. These
@@ -190,6 +195,10 @@ of gpus_per_node*.
 `backend.template_path` selects a custom template and disables automatic
 selection. A custom template must support Ray when the deployment requires it.
 
+Ray mode does not support the Dynamo router. Configuration validation rejects
+`router.type: dynamo` for a swarm that requires Ray. The other routers use one
+upstream per replica at the address of its Ray head.
+
 ## Node selection and limits
 
 `backend.partition`, `account` and `qos` are required. Beyond those,
@@ -223,6 +232,26 @@ domyn-swarm down my-swarm-name
 
 The command takes a swarm name. It uses `scancel` to stop the load balancer and
 every replica job.
+
+## Load balancing
+
+By default, Nginx sends requests to the replica with the fewest open connections
+(`least_conn`). To reuse cached conversation history, configure a router under
+`backend.endpoint.router`:
+
+```yaml
+backend:
+  type: slurm
+  endpoint:
+    nginx_image: /shared/images/nginx.sif
+    router:
+      type: vllm-router
+      image: /shared/images/vllm-router_0.1.16.sif
+      policy: cache_aware
+```
+
+See [Load balancing and routers](load-balancing.md) for router comparisons and
+instructions for sending session IDs.
 
 ## Metrics
 

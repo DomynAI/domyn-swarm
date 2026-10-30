@@ -9,6 +9,7 @@ import tempfile
 import jinja2
 
 import domyn_swarm
+from domyn_swarm.config.router import VllmRouter
 from domyn_swarm.config.slurm import SlurmConfig
 from domyn_swarm.config.swarm import DomynLLMSwarmConfig
 from domyn_swarm.helpers.data import get_device_slices
@@ -100,6 +101,13 @@ class SlurmDriver:
         """Submit the load balancer job to Slurm with a dependency on the replica array job."""
         assert isinstance(self.cfg.backend, SlurmConfig)
 
+        router = self.cfg.backend.endpoint.router
+        if isinstance(router, VllmRouter) and router.policy == "consistent_hash":
+            logger.warning(
+                "vllm-router consistent_hash sends every request without a session ID "
+                "to one replica"
+            )
+
         env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(self.cfg.backend.template_path.parent),
             autoescape=False,
@@ -134,6 +142,7 @@ class SlurmDriver:
                 targets_path=targets_path,
                 gpu_targets_path=gpu_targets_path,
                 ray_targets_path=ray_targets_path,
+                router_metrics=self.cfg.backend.endpoint.router.metrics_target(),
                 cfg=self.cfg,
             )
             (serving_dir / "prometheus.yml").write_text(prom_yml)
