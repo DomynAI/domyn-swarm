@@ -2,7 +2,7 @@
 name = "domyn-swarm"
 version = "0.34.0"
 description = "CLI and programmatic API to launch LLM inference endpoints on Slurm, using simple configuration files"
-readme = "README.md"
+dynamic = ["readme"]
 requires-python = ">=3.11,<3.15"
 license = { text = "Apache-2.0" }
 classifiers = [
@@ -158,8 +158,33 @@ version_files = [
 major_version_zero = true
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme>=25.1"]
 build-backend = "hatchling.build"
+
+# PyPI renders the README away from the repository, so relative paths would
+# break there, and it ignores GitHub's theme fragments, so it would show both
+# logos. Links follow main rather than the release tag.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '<img src="[^"]*#gh-dark-mode-only"[^>]*>\n'
+replacement = ''
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '#gh-light-mode-only"'
+replacement = '"'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(src="|!\[[^\]]*\]\()(static/[^)"]+)'
+replacement = '\1https://raw.githubusercontent.com/DomynAI/domyn-swarm/main/\2'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(href="|\]\()(?!https?://|#)([^)"]+)'
+replacement = '\1https://github.com/DomynAI/domyn-swarm/blob/main/\2'
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/domyn_swarm"]
