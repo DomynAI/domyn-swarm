@@ -62,18 +62,16 @@ show inference throughput, queue depth, and GPU utilization.
 
 ## Quick start
 
-> [!NOTE]
-> domyn-swarm is not yet published on PyPI. Install it from the repository.
-> `pip install domyn-swarm` will work after the first published release.
-
 ```bash
-uv tool install --from git+https://github.com/DomynAI/domyn-swarm.git@v0.34.0 --python 3.12 domyn-swarm
+uv tool install --python 3.12 domyn-swarm
 ```
 
 <details>
 <summary>Extras and other install methods</summary>
 
 ```bash
+pip install domyn-swarm             # into the current environment
+
 # Optional extras
 pip install 'domyn-swarm[lepton]'   # NVIDIA DGX Cloud Lepton backend
 pip install 'domyn-swarm[polars]'   # Polars data backend
@@ -81,7 +79,7 @@ pip install 'domyn-swarm[ray]'      # Ray Data backend
 pip install 'domyn-swarm[all]'      # everything
 ```
 
-`uv add`, editable installs and the Lepton `lep login` step are covered in
+`uv add`, installs from source and the Lepton `lep login` step are covered in
 [Installation](https://domynswarm.domyn.com/latest/getting-started/installation.html).
 
 </details>
