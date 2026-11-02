@@ -4,13 +4,21 @@ domyn-swarm needs Python 3.11 or newer.
 
 ## From PyPI
 
-:::{note}
-The package is not published on PyPI yet, but it will be soon. Until then, use
-[from source](#from-source).
-:::
-
 ```bash
 pip install domyn-swarm
+```
+
+With [uv](https://docs.astral.sh/uv/):
+
+```bash
+# into the current environment
+uv pip install domyn-swarm
+
+# as a project dependency; add --extra lepton for the Lepton backend
+uv add domyn-swarm
+
+# as a standalone tool
+uv tool install --python 3.12 domyn-swarm
 ```
 
 ## Optional extras
@@ -30,26 +38,17 @@ See [Choosing a data backend](../guides/data-backends.md) for when `polars` or
 
 ## From source
 
-Pin a release rather than tracking the default branch:
+Install from the repository to use a change that is not released yet. To pin a
+revision, replace `main` with a branch name, a tag, or a commit hash:
 
 ```bash
-RELEASE=v0.34.0
-pip install git+ssh://git@github.com/DomynAI/domyn-swarm.git@$RELEASE
+pip install git+https://github.com/DomynAI/domyn-swarm.git@main
 ```
 
-With [uv](https://docs.astral.sh/uv/):
+With uv:
 
 ```bash
-RELEASE=v0.34.0
-
-# into the current environment
-uv pip install git+ssh://git@github.com/DomynAI/domyn-swarm.git@$RELEASE
-
-# as a project dependency; add --extra lepton for the Lepton backend
-uv add git+ssh://git@github.com/DomynAI/domyn-swarm.git@$RELEASE
-
-# as a standalone tool
-uv tool install --from git+ssh://git@github.com/DomynAI/domyn-swarm.git@$RELEASE \
+uv tool install --from git+https://github.com/DomynAI/domyn-swarm.git@main \
   --python 3.12 domyn-swarm
 ```
 
