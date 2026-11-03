@@ -1,0 +1,32 @@
+# vLLM image with NVIDIA Dynamo for `backend.endpoint.router` with `type: dynamo`.
+# Use the result as the swarm's `image`. The replicas then run `dynamo.vllm`
+# workers and the load-balancer job runs the Dynamo frontend from it.
+#
+# Build the vLLM image first, then this one, in the same directory:
+#   sudo singularity build vllm_0.31.0-cu129.sif docker://vllm/vllm-openai:v0.31.0-cu129
+#   sudo singularity build vllm-dynamo_1.6.0.sif vllm-dynamo.def
+#
+# Each Dynamo release pins one vLLM version: ai-dynamo 1.6.0 pins vLLM 0.31.0.
+# The install keeps the image's vllm and torch. It uses the image's package
+# versions as pip constraints and leaves out the vllm extra of ai-dynamo.
+# UNPIN lists the packages that ai-dynamo 1.6.0 needs at another version.
+Bootstrap: localimage
+From: vllm_0.31.0-cu129.sif
+
+%post
+    set -eu
+    DYNAMO_VERSION=1.6.0
+    UNPIN="pydantic pydantic_core googleapis-common-protos"
+
+    python3 -m pip list --format=freeze --disable-pip-version-check > /tmp/image-packages.txt
+    unpin_pattern="^($(printf '%s\n' $UNPIN | tr 'A-Z_.' 'a-z--' | paste -sd'|' -))=="
+    tr 'A-Z_.' 'a-z--' < /tmp/image-packages.txt | paste -d' ' - /tmp/image-packages.txt |
+        grep -v -E "$unpin_pattern" | cut -d' ' -f2 > /tmp/constraints.txt
+    python3 -m pip install --no-cache-dir --disable-pip-version-check \
+        --constraint /tmp/constraints.txt "ai-dynamo==${DYNAMO_VERSION}"
+    rm -f /tmp/image-packages.txt /tmp/constraints.txt
+    python3 -m dynamo.frontend --help > /dev/null
+
+%labels
+    Dynamo 1.6.0
+    vLLM 0.31.0

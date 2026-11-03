@@ -1,0 +1,97 @@
+{#
+Macros shared by the router fragments that lb.sh.j2 includes.
+
+Every fragment routers/<type>.sh.j2 defines these shell functions:
+  router_start          - start the router in the background, set ROUTER_PID,
+                          write it to ROUTER_PID_FILE, and return once
+                          http://127.0.0.1:$ROUTER_PORT/health answers, or exit
+                          1 after WAIT_SEC.
+  router_stop           - stop the router whose PID ROUTER_PID_FILE holds.
+                          Safe to call twice.
+  router_apply_replicas APPLIED_FILE NEW_FILE
+                        - bring the router in line with the replica list in
+                          NEW_FILE (one host:port per line). APPLIED_FILE holds
+                          the replicas the router has and may be missing. A
+                          router that changes membership call by call records
+                          each successful call in APPLIED_FILE at once, so after
+                          a failure it still matches the router and the retry
+                          repeats only the failed calls. Returns non-zero when
+                          any call failed.
+A fragment may also define router_registrations, which prints router state
+whose change triggers router_apply_replicas like a replica list change does.
+A fragment that runs a router process also sets these variables:
+  ROUTER_PORT           - lb.sh.j2 passes it to the supervisor as the nginx
+                          `llm` upstream.
+  ROUTER_LOG            - the router output. router_wait_healthy prints its
+                          tail when the router does not become healthy.
+  ROUTER_PID_FILE       - router_start writes the router PID there. router_stop
+                          and the replica applier in lb.sh.j2 read it, and the
+                          applier restarts a router whose process exited.
+#}
+{% macro sh_quote(value) -%}
+{% set value = value | string %}
+{% if value and not (value | reject("in", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@%+=:,./-_") | list) %}
+{{ value }}
+{%- else %}
+'{{ value | replace("'", "'\\''") }}'
+{%- endif %}
+{%- endmacro %}
+
+{% macro router_exec(router, run=False) -%}
+{% if router.binary %}
+{{ sh_quote(router.binary) }}
+{%- else %}
+singularity {{ "run" if run else "exec" }} --bind "$HOST_DIR" {{ sh_quote(router.image) }}
+{%- endif %}
+{%- endmacro %}
+
+{% macro router_wait_healthy(name) %}
+    local deadline=$(( $(date +%s) + WAIT_SEC ))
+    until curl -sf --max-time 5 -o /dev/null "http://127.0.0.1:$ROUTER_PORT/health"; do
+        if ! kill -0 "$ROUTER_PID" 2>/dev/null || (( $(date +%s) > deadline )); then
+            echo "[lb] ERROR: {{ name }} did not become healthy on 127.0.0.1:$ROUTER_PORT" >&2
+            tail -n 20 "$ROUTER_LOG" >&2 2>/dev/null || true
+            router_stop
+            exit 1
+        fi
+        sleep 1
+    done
+    echo "[lb] {{ name }} listening on 127.0.0.1:$ROUTER_PORT (PID $ROUTER_PID)"
+{% endmacro %}
+
+{# router_stop for a router whose router_start writes ROUTER_PID to ROUTER_PID_FILE. #}
+{% macro router_stop_from_pid_file() %}
+# The replica applier runs in a subshell and restarts the router there, so the
+# PID file, not ROUTER_PID, tells the shutdown trap in the parent which process
+# to stop. The wait keeps the next start from racing for the port.
+router_stop() {
+    local pid="${ROUTER_PID:-}" i
+    [ -f "$ROUTER_PID_FILE" ] && pid="$(cat "$ROUTER_PID_FILE")"
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null || true
+        for i in $(seq 1 20); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.5
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "[lb] WARNING: router PID $pid ignored SIGTERM; sending SIGKILL" >&2
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+        rm -f "$ROUTER_PID_FILE"
+    fi
+    ROUTER_PID=""
+}
+{%- endmacro %}
+
+{# router_stop and router_apply_replicas for a router that reads the replica set only at start. #}
+{% macro restart_on_replica_change() %}
+
+{{ router_stop_from_pid_file() }}
+
+# The start runs in a subshell so that a failed health wait, which exits, makes
+# the apply fail and retry instead of ending the applier loop.
+router_apply_replicas() {
+    router_stop
+    ( router_start )
+}
+{%- endmacro %}

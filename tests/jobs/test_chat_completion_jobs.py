@@ -226,6 +226,39 @@ async def test_multi_turn_chat_completion_job_includes_reasoning_content(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_multi_turn_job_sends_one_session_per_conversation(tmp_path):
+    turns = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b"},
+        {"role": "user", "content": "c"},
+        {"role": "assistant", "content": "d"},
+        {"role": "user", "content": "e"},
+    ]
+    df = pd.DataFrame({"messages": [turns, turns]})
+    mock_resp = AsyncMock()
+    mock_resp.choices = [type("C", (), {"message": type("M", (), {"content": "ok"})()})]
+
+    job = MultiTurnChatCompletionJob(model="gpt-4", max_concurrency=1)
+    job.client = AsyncMock()
+    create = AsyncMock(return_value=mock_resp)
+    job.client.chat.completions.create = create
+
+    await job.run(df, tag="test", checkpoint_dir=tmp_path / "checkpoints")
+
+    calls = create.call_args_list
+    assert len(calls) == 6
+    ids = [c.kwargs["extra_headers"]["X-Session-ID"] for c in calls]
+    assert len(set(ids[:3])) == 1 and len(set(ids[3:])) == 1 and ids[0] != ids[3]
+    finals = [c.kwargs["extra_headers"].get("X-Dynamo-Session-Final") for c in calls]
+    assert finals == [None, None, "true", None, None, "true"]
+    assert all(
+        c.kwargs["extra_body"]["session_params"]["session_id"]
+        == c.kwargs["extra_headers"]["X-Session-ID"]
+        for c in calls
+    )
+
+
+@pytest.mark.asyncio
 async def test_multi_turn_chat_completion_job_requires_user_or_tool_message(monkeypatch):
     job = MultiTurnChatCompletionJob(model="gpt-4")
     job.client = AsyncMock()

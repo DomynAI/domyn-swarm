@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import jinja2
 
+from domyn_swarm.config.router import NginxRouter
 from domyn_swarm.config.slurm import GpuExporterConfig
 
 TPL_DIR = Path("src/domyn_swarm/templates")
@@ -25,7 +26,7 @@ FIX_DIR = Path("tests/backends/fixtures")
 def _cfg(requires_ray: bool):
     gx = GpuExporterConfig(enabled=False)
     mon = SimpleNamespace(enabled=False, mode="binary", gpu_exporter=gx)
-    ep = SimpleNamespace(port=9000, monitoring=mon, ray_port=6379)
+    ep = SimpleNamespace(port=9000, monitoring=mon, ray_port=6379, router=NginxRouter())
     backend = SimpleNamespace(
         endpoint=ep,
         requires_ray=requires_ray,

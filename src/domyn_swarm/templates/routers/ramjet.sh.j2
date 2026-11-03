@@ -1,0 +1,29 @@
+{% from "routers/_common.sh.j2" import restart_on_replica_change, router_exec, router_wait_healthy, sh_quote %}
+ROUTER_PORT={{ router.port }}
+ROUTER_LOG="$HOST_DIR/logs/router.log"
+ROUTER_PID_FILE="$HOST_DIR/run/router.pid"
+
+router_start() {
+    local upstream
+    upstream="$(sed 's|^|http://|' "$SERVING_DIR/replicas.txt" | paste -sd, -)"
+    (
+        export RJ_UPSTREAM="$upstream"
+        export RJ_API_ADDR=127.0.0.1:$ROUTER_PORT
+        export RJ_METRICS_ADDR=127.0.0.1:{{ router.metrics_port }}
+{% for key, value in router.policy_env().items() %}
+        export {{ key }}={{ sh_quote(value) }}
+{% endfor %}
+{% for key, value in router.env.items() %}
+        export {{ key }}={{ sh_quote(value) }}
+{% endfor %}
+        if [ -n "${LB_API_KEY:-}" ]; then export RJ_UPSTREAM_TOKEN="$LB_API_KEY"; fi
+        exec {{ router_exec(router, run=True) }} {%+ for arg in router.args %}{{ sh_quote(arg) }} {% endfor %}\
+            >>"$ROUTER_LOG" 2>&1
+    ) &
+    ROUTER_PID=$!
+    echo "$ROUTER_PID" >"$ROUTER_PID_FILE"
+{{ router_wait_healthy("ramjet") -}}
+}
+
+# ramjet reads its upstream list only at start, so any change restarts it.
+{{ restart_on_replica_change() }}

@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import jinja2
 
+from domyn_swarm.config.router import NginxRouter
+
 TEMPLATES = Path(__file__).resolve().parents[2] / "src" / "domyn_swarm" / "templates"
 
 
@@ -25,6 +27,7 @@ def _main_cfg(cpus_per_task: int = 32, nginx_worker_processes=None) -> SimpleNam
             endpoint=SimpleNamespace(
                 cpus_per_task=cpus_per_task,
                 nginx_worker_processes=nginx_worker_processes,
+                router=NginxRouter(),
             )
         )
     )
@@ -63,6 +66,7 @@ def test_server_conf_has_llm_proxy_and_health():
     class EP:
         port = 9000
         nginx_timeout = "60s"
+        router = NginxRouter()
         enable_proxy_buffering = True
         monitoring = SimpleNamespace(
             enabled=False,
@@ -93,6 +97,7 @@ def test_server_conf_includes_ray_when_enabled():
     class EP:
         port = 9000
         nginx_timeout = "60s"
+        router = NginxRouter()
         enable_proxy_buffering = False
         monitoring = SimpleNamespace(
             enabled=False,
@@ -128,6 +133,7 @@ class _EP:
     enable_proxy_buffering = True
     collector_port = 9100
     nginx_upstream_keepalive = 32
+    router = NginxRouter()
     monitoring = SimpleNamespace(
         enabled=False,
         mode="container",
@@ -223,6 +229,7 @@ def _cfg_with_monitoring(enabled: bool):
     class EP:
         port = 9000
         nginx_timeout = "60s"
+        router = NginxRouter()
         enable_proxy_buffering = True
         monitoring = mon
 
@@ -311,6 +318,7 @@ def _render_lb_with_monitoring(enabled: bool):
                 nginx_image="/img/nginx.sif",
                 nginx_timeout="60s",
                 enable_proxy_buffering=True,
+                router=NginxRouter(),
                 monitoring=SimpleNamespace(
                     enabled=enabled,
                     mode="container",

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from domyn_swarm import utils
 from domyn_swarm.config.defaults import default_for
 from domyn_swarm.config.plan import DeploymentPlan
+from domyn_swarm.config.router import NginxRouter, RouterConfig
 from domyn_swarm.platform.protocols import ServingHandle
 
 _DCGM_DEFAULT_IMAGE = "nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.1-ubuntu22.04"
@@ -203,7 +204,7 @@ class MonitoringConfig(BaseModel):
 
 
 class SlurmEndpointConfig(BaseModel):
-    """Configuration for the Nginx load-balancer job fronting the replicas."""
+    """Configuration for the load-balancer job fronting the replicas."""
 
     cpus_per_task: int = Field(
         default=32,
@@ -316,6 +317,14 @@ class SlurmEndpointConfig(BaseModel):
         description=(
             "Prometheus and GPU-exporter sidecars running alongside the load "
             "balancer. Off by default, and Slurm-only."
+        ),
+    )
+    router: RouterConfig = Field(
+        default_factory=NginxRouter,
+        description=(
+            "Router that balances requests across replicas. nginx stays the front "
+            "door on `port` for every router type and forwards to the selected "
+            "router. Defaults to plain nginx balancing."
         ),
     )
 

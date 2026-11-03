@@ -1,7 +1,13 @@
 {# src/domyn_swarm/templates/nginx_server.conf.j2 — static server block (conf.d/10-server.conf) #}
 server {
   listen {{ cfg.backend.endpoint.port }};
+  {% if cfg.backend.endpoint.router.type != "nginx" %}
+  {# Only the OpenAI API reaches the router, so its admin paths stay local. #}
+  location /v1/ {
+    if ($dswarm_authorized = 0) { return 401; }
+  {% else %}
   location / {
+  {% endif %}
     proxy_pass http://llm;
     proxy_connect_timeout       {{ cfg.backend.endpoint.nginx_timeout }};
     proxy_send_timeout          {{ cfg.backend.endpoint.nginx_timeout }};
@@ -27,6 +33,11 @@ server {
     proxy_next_upstream error timeout http_502 http_504;
     proxy_next_upstream_tries 3;
   }
+  {% if cfg.backend.endpoint.router.type != "nginx" %}
+  location / {
+    return 404;
+  }
+  {% endif %}
   location = /health {
     proxy_pass http://llm/health;
     proxy_connect_timeout 2s;

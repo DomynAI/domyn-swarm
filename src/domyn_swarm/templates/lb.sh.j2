@@ -33,6 +33,38 @@ COLLECTOR_READY_FILE="$HOST_DIR/run/collector.ready"
 
 mkdir -p "$HOST_DIR" "$SERVING_DIR" "$HOST_DIR/run" "$HOST_DIR/logs"
 
+{% set router = cfg.backend.endpoint.router %}
+{% if router.type != "nginx" %}
+# begin api key check
+LB_API_KEY="${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}"
+if [[ -n "$LB_API_KEY" && ! "$LB_API_KEY" =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then
+    echo "[lb] ERROR: the API key holds characters that the nginx check cannot match; use letters, digits and ._~+/=-" >&2
+    exit 1
+fi
+(
+    umask 077
+    if [[ -n "$LB_API_KEY" ]]; then
+        # nginx matches plain map keys case-insensitively, so use an anchored regex.
+        escaped_key="${LB_API_KEY//./\\.}"
+        escaped_key="${escaped_key//+/\\+}"
+        printf 'map $http_authorization $dswarm_authorized { "~^Bearer %s$" 1; default 0; }\n' "$escaped_key"
+    else
+        printf 'map $http_authorization $dswarm_authorized { default 1; }\n'
+    fi > "$SERVING_DIR/05-auth.conf"
+)
+# end api key check
+{% endif %}
+# A fragment overrides this to print router state whose change needs a
+# router_apply_replicas, as a change in the replica list does.
+router_registrations() { :; }
+{% include "routers/" ~ router.type ~ ".sh.j2" %}
+
+replica_snapshot() {
+    cat "$SERVING_DIR/replicas.txt"
+    router_registrations
+}
+
+
 collector_cmd() {
   singularity exec --writable-tmpfs --bind "{{ collector_script_path }}:/opt/watchdog_collector.py,$HOST_DIR" "$PYTHON_IMG" \
     python3 /opt/watchdog_collector.py \
@@ -53,7 +85,7 @@ collector_cmd() {
 
 collector_start_or_die
 
-trap 'echo "[lb] shutting down collector"; kill $COLLECTOR_PID' EXIT
+trap 'echo "[lb] shutting down collector"; router_stop; kill $COLLECTOR_PID' EXIT
 
 echo "[lb] waiting for $REPLICAS head files from job $DEP_JOBID"
 t0=$(date +%s)
@@ -77,7 +109,12 @@ singularity exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_s
   python3 /opt/lb_supervisor.py --once \
   --serving-dir "$SERVING_DIR" \
   --upstream-keepalive {{ cfg.backend.endpoint.nginx_upstream_keepalive }} \
-  {% if cfg.backend.requires_ray %}--ray-enabled --ray-dashboard-port {{ cfg.backend.ray_dashboard_port }} --ray-port {{ cfg.backend.ray_port }} {% endif %}{% if cfg.backend.endpoint.monitoring.enabled %}--emit-targets {% if cfg.backend.endpoint.monitoring.gpu_exporter.enabled %}--emit-gpu-targets {% endif %}{% if cfg.backend.endpoint.monitoring.ray_metrics.enabled %}--emit-ray-targets {% endif %}{% endif %}
+  {% if cfg.backend.requires_ray %}--ray-enabled --ray-dashboard-port {{ cfg.backend.ray_dashboard_port }} --ray-port {{ cfg.backend.ray_port }} {% endif %}{% if cfg.backend.endpoint.monitoring.enabled %}--emit-targets {% if cfg.backend.endpoint.monitoring.gpu_exporter.enabled %}--emit-gpu-targets {% endif %}{% if cfg.backend.endpoint.monitoring.ray_metrics.enabled %}--emit-ray-targets {% endif %}{% endif %}{% if router.type != "nginx" %}--router-address 127.0.0.1:$ROUTER_PORT {% endif %}
+
+# The snapshot comes first, so a change while the router starts leads to one
+# more apply instead of a record the router never saw.
+replica_snapshot >"$HOST_DIR/run/replicas.applied"
+router_start
 
 CACHE_DIR="$TMPDIR/cache"
 mkdir -p "$CACHE_DIR"
@@ -138,7 +175,7 @@ singularity exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_s
   python3 /opt/lb_supervisor.py \
   --serving-dir "$SERVING_DIR" \
   --upstream-keepalive {{ cfg.backend.endpoint.nginx_upstream_keepalive }} \
-  {% if cfg.backend.requires_ray %}--ray-enabled --ray-dashboard-port {{ cfg.backend.ray_dashboard_port }} --ray-port {{ cfg.backend.ray_port }} {% endif %}{% if cfg.backend.endpoint.monitoring.enabled %}--emit-targets {% if cfg.backend.endpoint.monitoring.gpu_exporter.enabled %}--emit-gpu-targets {% endif %}{% if cfg.backend.endpoint.monitoring.ray_metrics.enabled %}--emit-ray-targets {% endif %}{% endif %}\
+  {% if cfg.backend.requires_ray %}--ray-enabled --ray-dashboard-port {{ cfg.backend.ray_dashboard_port }} --ray-port {{ cfg.backend.ray_port }} {% endif %}{% if cfg.backend.endpoint.monitoring.enabled %}--emit-targets {% if cfg.backend.endpoint.monitoring.gpu_exporter.enabled %}--emit-gpu-targets {% endif %}{% if cfg.backend.endpoint.monitoring.ray_metrics.enabled %}--emit-ray-targets {% endif %}{% endif %}{% if router.type != "nginx" %}--router-address 127.0.0.1:$ROUTER_PORT {% endif %}\
   >>"$HOST_DIR/logs/supervisor.log" 2>&1 &
 SUPERVISOR_PID=$!
 echo "[lb] started supervisor PID $SUPERVISOR_PID"
@@ -165,6 +202,47 @@ UPSTREAMS_FILE="$SERVING_DIR/00-upstreams.conf"
 RELOAD_PID=$!
 echo "[lb] started nginx reloader PID $RELOAD_PID"
 
-trap 'echo "[lb] shutting down"; kill $COLLECTOR_PID $SUPERVISOR_PID ${RELOAD_PID:-} ${PROM_PID:-} ${NGINX_EXP_PID:-} 2>/dev/null; singularity instance stop "$INSTANCE_NAME" || true; exit 0' EXIT SIGTERM
+REPLICAS_FILE="$SERVING_DIR/replicas.txt"
+APPLIED_FILE="$HOST_DIR/run/replicas.applied"
+
+# The supervisor may rewrite the list while a slow apply runs, so apply and
+# record one snapshot. After a failure the apply has already recorded its
+# successful calls in APPLIED_FILE, which must then stay as it is.
+applier_pass() {
+{% if router.type != "nginx" %}
+    if ! kill -0 "$(cat "$ROUTER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
+        echo "[lb] WARNING: {{ router.type }} exited; restarting" >&2
+        router_stop
+        # A snapshot taken before the start can only be older than what the
+        # router reads, so a change in between leads to one more apply.
+        if replica_snapshot >"$APPLIED_FILE.next" && ( router_start ); then
+            mv "$APPLIED_FILE.next" "$APPLIED_FILE"
+        fi
+        return 0
+    fi
+{% endif %}
+    if [ -f "$REPLICAS_FILE" ] && replica_snapshot >"$APPLIED_FILE.next" \
+        && ! cmp -s "$APPLIED_FILE.next" "$APPLIED_FILE"; then
+        if router_apply_replicas "$APPLIED_FILE" "$APPLIED_FILE.next"; then
+            mv "$APPLIED_FILE.next" "$APPLIED_FILE"
+{% if router.type != "nginx" %}
+            echo "[lb] applied replica set to the router"
+{% endif %}
+        else
+            echo "[lb] WARNING: router did not take the whole replica set; retrying" >&2
+        fi
+    fi
+}
+
+(
+  while true; do
+    applier_pass
+    sleep 5
+  done
+) &
+APPLY_PID=$!
+echo "[lb] started router replica applier PID $APPLY_PID"
+
+trap 'echo "[lb] shutting down"; kill ${APPLY_PID:-} 2>/dev/null || true; router_stop; kill $COLLECTOR_PID $SUPERVISOR_PID ${RELOAD_PID:-} ${PROM_PID:-} ${NGINX_EXP_PID:-} 2>/dev/null; singularity instance stop "$INSTANCE_NAME" || true; exit 0' EXIT SIGTERM
 
 wait $SUPERVISOR_PID

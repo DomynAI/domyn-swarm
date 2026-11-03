@@ -49,6 +49,7 @@ already installed cluster-wide, `mode: binary` alone is enough.
 | `gpu` | each node's GPU exporter | only with `gpu_exporter.enabled` |
 | `gpu_ownership` | `/gpu_ownership` on the endpoint | only with `gpu_exporter.enabled` |
 | `ray` | each node's Ray metrics port | only with `ray_metrics.enabled` |
+| `router` | the router's metrics endpoint | only when a router other than Nginx is enabled. See [Load balancing and routers](load-balancing.md#monitoring) |
 
 Slurm determines each replica host and port after placement. Each replica writes
 a `replica-<id>.head` file in the swarm serving directory. The load-balancer

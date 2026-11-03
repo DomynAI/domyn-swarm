@@ -1,0 +1,27 @@
+{% from "routers/_common.sh.j2" import sh_quote %}
+{% set router = cfg.backend.endpoint.router %}
+  local rpc_host
+  rpc_host="$(getent ahostsv4 "$node" | awk '{print $1; exit}')" || true
+  if [[ -z "$rpc_host" ]]; then
+    echo "[replica $global_id] ERROR: $node has no IPv4 address for the Dynamo request plane" >&2
+    exit 1
+  fi
+  mkdir -p "$SWARM_DIR/dynamo-kv"
+  SINGULARITYENV_DYN_SYSTEM_PORT=$port \
+  SINGULARITYENV_DYN_SYSTEM_USE_ENDPOINT_HEALTH_STATUS='["generate"]' \
+  SINGULARITYENV_DYN_TCP_RPC_HOST="$rpc_host" \
+  SINGULARITYENV_DYN_FILE_KV="$SWARM_DIR/dynamo-kv" \
+  SINGULARITYENV_PYTHONHASHSEED=0 \
+  srun --export=ALL -n1 -N1 -w $node --gres=gpu:{{ cfg.gpus_per_replica }} \
+     --cpus-per-task={{ cfg.cpus_per_task }} \
+     singularity exec --bind $MOUNTS{% if router.venv %},{{ sh_quote(router.venv) }}{% endif %} --nv --writable-tmpfs "$VLLM_IMAGE" \
+{% include "serve/_watchdog.sh.j2" %}
+     {{ sh_quote(router.venv ~ "/bin/python") if router.venv else "python3" }} -m dynamo.vllm --model {{ cfg.model }} \
+{% include "serve/_tensor_parallel.sh.j2" %}
+     {{ cfg.args }} \
+     --namespace {{ job_name }} \
+     --discovery-backend file --request-plane tcp --event-plane zmq \
+{% if router.uses_kv_events %}
+     --kv-events-config "{\"enable_kv_cache_events\":true,\"publisher\":\"zmq\",\"topic\":\"\",\"endpoint\":\"tcp://*:$(( {{ router.kv_events_port }} + global_id ))\"}" \
+{% endif %}
+     >> "$log_dir/vllm.log" 2>&1 &

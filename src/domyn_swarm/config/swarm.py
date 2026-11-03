@@ -27,6 +27,8 @@ from domyn_swarm.helpers.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+_DYNAMO_REJECTED_VLLM_FLAGS = ("--enable-auto-tool-choice", "--tool-call-parser")
+
 
 class DomynLLMSwarmConfig(BaseModel):
     """Validated configuration for one serving swarm.
@@ -111,7 +113,8 @@ class DomynLLMSwarmConfig(BaseModel):
     args: str = Field(
         default="",
         description=(
-            "Extra CLI flags passed verbatim to `python -m vllm.entrypoints.openai.api_server`."
+            "Extra CLI flags passed verbatim to `python -m vllm.entrypoints.openai.api_server`, "
+            "or to `dynamo.vllm` with the Dynamo router."
         ),
     )
     port: int = Field(
@@ -285,6 +288,34 @@ class DomynLLMSwarmConfig(BaseModel):
             rm = be.endpoint.monitoring.ray_metrics
             if rm.enabled is None:
                 rm.enabled = bool(be.endpoint.monitoring.enabled and be.requires_ray)
+        return self
+
+    @model_validator(mode="after")
+    def _reject_dynamo_with_ray(self) -> "DomynLLMSwarmConfig":
+        from domyn_swarm.config.slurm import SlurmConfig
+
+        be = self.backend
+        if isinstance(be, SlurmConfig) and be.requires_ray and be.endpoint.router.type == "dynamo":
+            raise ValueError(
+                "Dynamo routing does not support Ray mode (one replica across several nodes)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_vllm_tool_call_args_with_dynamo(self) -> "DomynLLMSwarmConfig":
+        from domyn_swarm.config.slurm import SlurmConfig
+
+        be = self.backend
+        if not (isinstance(be, SlurmConfig) and be.endpoint.router.type == "dynamo"):
+            return self
+        # vLLM accepts underscores in flag names and normalizes them to hyphens.
+        flags = {token.split("=", 1)[0].replace("_", "-") for token in self.args.split()}
+        rejected = [flag for flag in _DYNAMO_REJECTED_VLLM_FLAGS if flag in flags]
+        if rejected:
+            raise ValueError(
+                f"dynamo.vllm exits on {' and '.join(rejected)} in `args`. Use the Dynamo "
+                "flags --dyn-tool-call-parser and --dyn-reasoning-parser instead"
+            )
         return self
 
 

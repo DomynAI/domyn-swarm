@@ -29,6 +29,7 @@ def render_swarm_status(
     *,
     replica_summary: SwarmReplicaSummary | None = None,
     replica_rows: list | None = None,
+    router: str | None = None,
     console: Console | None = None,
 ) -> None:
     """Renders a comprehensive status view for a single swarm deployment.
@@ -43,6 +44,7 @@ def render_swarm_status(
             in uppercase.
         st: The serving status object containing phase, URL, and detailed diagnostic
             information.
+        router: Optional load-balancer router type, shown for Slurm swarms.
         console: Optional Rich Console instance for output. If None, creates a new
             Console instance.
 
@@ -72,6 +74,7 @@ def render_swarm_status(
     if st.url:
         url_txt.stylize(f"link {st.url}")
     info.add_row("Endpoint", url_txt)
+    _add_if(info, "Router", router)
 
     # Diagnostics section (existing behaviour)
     diag = _kv_table()
