@@ -18,6 +18,9 @@
 #SBATCH --error={{ swarm_directory }}/logs/endpoint/lb.err
 
 set -eu
+{% for mod in cfg.backend.modules %}
+module load {{ mod }}
+{% endfor %}
 {% include "_container_runtime.sh.j2" %}
 
 REPLICAS={{ replicas }}
@@ -36,7 +39,7 @@ COLLECTOR_READY_FILE="$HOST_DIR/run/collector.ready"
 mkdir -p "$HOST_DIR" "$SERVING_DIR" "$HOST_DIR/run" "$HOST_DIR/logs"
 
 collector_cmd() {
-  "$CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ collector_script_path }}:/opt/watchdog_collector.py,$HOST_DIR" "$PYTHON_IMG" \
+  "$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ collector_script_path }}:/opt/watchdog_collector.py,$HOST_DIR" "$PYTHON_IMG" \
     python3 /opt/watchdog_collector.py \
     --db "$HOST_DIR/watchdog.db" \
     --host "0.0.0.0" \
@@ -75,7 +78,7 @@ done
 echo "[lb] all replicas ready"
 
 # Initial upstreams config (one-shot) before nginx starts.
-"$CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_supervisor.py,$HOST_DIR" "$PYTHON_IMG" \
+"$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_supervisor.py,$HOST_DIR" "$PYTHON_IMG" \
   python3 /opt/lb_supervisor.py --once \
   --serving-dir "$SERVING_DIR" \
   --upstream-keepalive {{ cfg.backend.endpoint.nginx_upstream_keepalive }} \
@@ -84,7 +87,7 @@ echo "[lb] all replicas ready"
 CACHE_DIR="$TMPDIR/cache"
 mkdir -p "$CACHE_DIR"
 
-"$CONTAINER_RUNTIME" instance start --writable-tmpfs \
+"$DSWARM_CONTAINER_RUNTIME" instance start --writable-tmpfs \
     -B "$HOST_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
     -B "$SERVING_DIR:/etc/nginx/conf.d:ro" \
     -B "$HOST_DIR/run":/run \
@@ -92,15 +95,15 @@ mkdir -p "$CACHE_DIR"
     -B "$HOST_DIR/logs/endpoint:/var/log/nginx" \
     "$NGINX_IMG" "$INSTANCE_NAME"
 
-"$CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -t' \
-  || { echo "[lb] ERROR: nginx config invalid" >&2; "$CONTAINER_RUNTIME" instance stop "$INSTANCE_NAME" || true; exit 1; }
+"$DSWARM_CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -t' \
+  || { echo "[lb] ERROR: nginx config invalid" >&2; "$DSWARM_CONTAINER_RUNTIME" instance stop "$INSTANCE_NAME" || true; exit 1; }
 echo "[lb] started nginx instance '$INSTANCE_NAME'"
 
 {% if cfg.backend.endpoint.monitoring.enabled %}
 MON_PROM_DIR="$TMPDIR/prometheus"
 mkdir -p "$MON_PROM_DIR"
 {% if cfg.backend.endpoint.monitoring.mode == "container" %}
-"$CONTAINER_RUNTIME" exec --writable-tmpfs \
+"$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs \
   -B "$SERVING_DIR:/etc/prometheus/serving:ro" \
   -B "$MON_PROM_DIR:/prometheus" \
   "{{ cfg.backend.endpoint.monitoring.prometheus_image }}" \
@@ -111,7 +114,7 @@ mkdir -p "$MON_PROM_DIR"
     --web.listen-address=127.0.0.1:{{ cfg.backend.endpoint.monitoring.port }} \
   >>"$HOST_DIR/logs/prometheus.log" 2>&1 &
 PROM_PID=$!
-"$CONTAINER_RUNTIME" exec --writable-tmpfs "{{ cfg.backend.endpoint.monitoring.nginx_exporter_image }}" \
+"$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs "{{ cfg.backend.endpoint.monitoring.nginx_exporter_image }}" \
   nginx-prometheus-exporter \
     --nginx.scrape-uri=http://127.0.0.1:{{ cfg.backend.endpoint.port }}/nginx_status \
     --web.listen-address=127.0.0.1:{{ cfg.backend.endpoint.monitoring.exporter_port }} \
@@ -136,7 +139,7 @@ echo "[lb] started monitoring sidecars (prometheus=$PROM_PID, nginx_exporter=$NG
 {% endif %}
 
 # Steady-state supervisor: keeps upstreams config in sync (generation only).
-"$CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_supervisor.py,$HOST_DIR" "$PYTHON_IMG" \
+"$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_supervisor.py,$HOST_DIR" "$PYTHON_IMG" \
   python3 /opt/lb_supervisor.py \
   --serving-dir "$SERVING_DIR" \
   --upstream-keepalive {{ cfg.backend.endpoint.nginx_upstream_keepalive }} \
@@ -153,8 +156,8 @@ UPSTREAMS_FILE="$SERVING_DIR/00-upstreams.conf"
   while true; do
     cur="$(md5sum "$UPSTREAMS_FILE" 2>/dev/null | awk '{print $1}')"
     if [ -n "$cur" ] && [ "$cur" != "$last" ]; then
-      if "$CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -t' >/dev/null 2>&1; then
-        "$CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -s reload' \
+      if "$DSWARM_CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -t' >/dev/null 2>&1; then
+        "$DSWARM_CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -s reload' \
           && echo "[lb] reloaded nginx (upstreams changed)" \
           && last="$cur"
       else
@@ -167,6 +170,6 @@ UPSTREAMS_FILE="$SERVING_DIR/00-upstreams.conf"
 RELOAD_PID=$!
 echo "[lb] started nginx reloader PID $RELOAD_PID"
 
-trap 'echo "[lb] shutting down"; kill $COLLECTOR_PID $SUPERVISOR_PID ${RELOAD_PID:-} ${PROM_PID:-} ${NGINX_EXP_PID:-} 2>/dev/null; "$CONTAINER_RUNTIME" instance stop "$INSTANCE_NAME" || true; exit 0' EXIT SIGTERM
+trap 'echo "[lb] shutting down"; kill $COLLECTOR_PID $SUPERVISOR_PID ${RELOAD_PID:-} ${PROM_PID:-} ${NGINX_EXP_PID:-} 2>/dev/null; "$DSWARM_CONTAINER_RUNTIME" instance stop "$INSTANCE_NAME" || true; exit 0' EXIT SIGTERM
 
 wait $SUPERVISOR_PID

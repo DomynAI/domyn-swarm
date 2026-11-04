@@ -47,10 +47,15 @@ class Settings(BaseSettings):
         alias="VLLM_API_KEY",
         description="Alternative env var for API token, used by vLLM",
     )
+    apptainerenv_vllm_api_key: SecretStr | None = Field(
+        default_factory=lambda data: data.get("vllm_api_key"),
+        alias="APPTAINERENV_VLLM_API_KEY",
+        description="Alternative API token passed into Apptainer containers.",
+    )
     singularityenv_vllm_api_key: SecretStr | None = Field(
         default_factory=lambda data: data.get("vllm_api_key"),
         alias="SINGULARITYENV_VLLM_API_KEY",
-        description="Alternative env var for API token, used inside Singularity containers",
+        description="Alternative API token passed into Singularity containers.",
     )
 
     @property
@@ -59,9 +64,15 @@ class Settings(BaseSettings):
 
         Returns:
             ``api_token`` if set, else ``vllm_api_key``, else
+            ``apptainerenv_vllm_api_key``, else
             ``singularityenv_vllm_api_key``, else ``None``.
         """
-        return self.api_token or self.vllm_api_key or self.singularityenv_vllm_api_key
+        return (
+            self.api_token
+            or self.vllm_api_key
+            or self.apptainerenv_vllm_api_key
+            or self.singularityenv_vllm_api_key
+        )
 
     mail_user: str | None = Field(
         description="Email address for Slurm job notifications (if enabled)",
