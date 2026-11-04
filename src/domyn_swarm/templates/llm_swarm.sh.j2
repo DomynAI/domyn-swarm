@@ -30,7 +30,7 @@ function start_vllm_replica() {
 {% endif %}
   srun --export=ALL -n1 -N1 -w $node --gres=gpu:{{ cfg.gpus_per_replica }} \
      --cpus-per-task={{ cfg.cpus_per_task }} \
-     singularity exec --bind $MOUNTS --nv --writable-tmpfs "$VLLM_IMAGE" \
+     "$CONTAINER_RUNTIME" exec --bind $MOUNTS --nv --writable-tmpfs "$VLLM_IMAGE" \
 {% if cfg.watchdog is not defined or cfg.watchdog.enabled %}
      python3 /opt/watchdog.py \
       {{ args_to_str(build_watchdog_args(
@@ -122,13 +122,13 @@ done
 launch_gpu_exporter() {
   echo "$(hostname):{{ _mon.gpu_exporter.port }}" > "{{ swarm_directory }}/serving/gpu-$(hostname).target"
 {% if _mon.gpu_exporter.kind == "dcgm" %}
-  singularity exec --nv \
+  "$CONTAINER_RUNTIME" exec --nv \
     --bind "{{ dcgm_core_counters_path }}:/etc/dcgm-exporter/core.csv" \
     "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
     dcgm-exporter -a ":{{ _mon.gpu_exporter.port }}" -f /etc/dcgm-exporter/core.csv \
     >> "$LOG_DIR/gpu_exporter.log" 2>&1 &
 {% elif _mon.mode == "container" %}
-  singularity exec --nv "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
+  "$CONTAINER_RUNTIME" exec --nv "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
     {{ _mon.gpu_exporter.resolved_binary(mode=_mon.mode) }} --web.listen-address=":{{ _mon.gpu_exporter.port }}" \
     >> "$LOG_DIR/gpu_exporter.log" 2>&1 &
 {% else %}

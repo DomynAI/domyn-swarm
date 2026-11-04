@@ -53,20 +53,20 @@ export REPLICA_ENV={{ swarm_directory }}/serving/replica-${REPL_ID}.env
 {% set _mon = cfg.backend.endpoint.monitoring %}
 {% set _ray_mon = _mon.enabled and _mon.ray_metrics and _mon.ray_metrics.enabled %}
 function start_ray_head() {
-  echo "[head] starting Singularity instance ($HEAD_NODE)..."
+  echo "[head] starting container instance ($HEAD_NODE)..."
   echo "VLLM_HOST_IP=$VLLM_HOST_IP" > $REPLICA_ENV
 
-  singularity instance start --bind $MOUNTS --contain --writable-tmpfs \
+  "$CONTAINER_RUNTIME" instance start --bind $MOUNTS --contain --writable-tmpfs \
                 --env-file $REPLICA_ENV \
                 --nv "$VLLM_IMAGE" "$INSTANCE_TAG" \
                 --disable-usage-stats --head --block \
                 --port=$HEAD_PORT --dashboard-host=0.0.0.0 --dashboard-port={{ cfg.backend.ray_dashboard_port }} --include-dashboard=true{{ (" --metrics-export-port=" ~ _mon.ray_metrics.port) if _ray_mon else "" }}
-  echo "[head] Singularity instance started: instance://$INSTANCE_TAG"
+  echo "[head] container instance started: instance://$INSTANCE_TAG"
 {% if _ray_mon %}
   echo "$(hostname):{{ _mon.ray_metrics.port }}" > "{{ swarm_directory }}/serving/ray-$(hostname).target"
 {% endif %}
 
-  src="$HOME/.singularity/instances/logs/$(hostname -f)/$USER"
+  src="$CONTAINER_RUNTIME_STATE_DIR/instances/logs/$(hostname -f)/$USER"
   dst="$RAY_LOG_DIR/head"
   mkdir -p "$dst"
 
@@ -78,8 +78,8 @@ function start_ray_head() {
 
 function wait_for_ray_ready() {
   echo "[head] waiting for Ray to come up ..."
-  until singularity exec instance://"$INSTANCE_TAG" ray status &>/dev/null; do
-    singularity exec instance://"$INSTANCE_TAG" env | grep VLLM_HOST_IP
+  until "$CONTAINER_RUNTIME" exec instance://"$INSTANCE_TAG" ray status &>/dev/null; do
+    "$CONTAINER_RUNTIME" exec instance://"$INSTANCE_TAG" env | grep VLLM_HOST_IP
     sleep 2
   done
   echo "[head] Ray OK"
@@ -97,7 +97,8 @@ function start_ray_workers() {
      --error="$RAY_LOG_DIR/workers/worker_%N_%t.err" \
      --output="$RAY_LOG_DIR/workers/worker_%N_%t.out" \
      bash -c '
-       export SINGULARITYENV_VLLM_HOST_IP=$(hostname -I | awk "{print \$1}")
+       export APPTAINERENV_VLLM_HOST_IP=$(hostname -I | awk "{print \$1}")
+       export SINGULARITYENV_VLLM_HOST_IP="$APPTAINERENV_VLLM_HOST_IP"
        NODE_TAG="$(hostname -s)"
 
        LOCAL_BASE='"${TMPDIR:-/tmp}"'/ray_tmp
@@ -114,7 +115,7 @@ function start_ray_workers() {
 
        inst="{{ job_name }}-worker"
 
-       singularity instance start --bind '"$MOUNTS"' --contain --writable-tmpfs --nv '"$VLLM_IMAGE"' \
+       "$CONTAINER_RUNTIME" instance start --bind '"$MOUNTS"' --contain --writable-tmpfs --nv '"$VLLM_IMAGE"' \
        $inst \
           --disable-usage-stats \
           --address='"$HEAD_NODE"':'"$HEAD_PORT"' \
@@ -124,7 +125,7 @@ function start_ray_workers() {
           --block
 
       # Sync loop while the instance exists
-      while singularity instance list 2>/dev/null | awk "{print \$1}" | grep -qx "$inst"; do
+      while "$CONTAINER_RUNTIME" instance list 2>/dev/null | awk "{print \$1}" | grep -qx "$inst"; do
         latest="$(ls -1dt "$LOCAL_BASE"/session_[0-9]* 2>/dev/null | head -n1 || true)"
         if [ -n "$latest" ] && [ -d "$latest/logs" ]; then
           timeout 8s rsync -a \
@@ -145,7 +146,7 @@ function start_ray_workers() {
 
 function start_vllm_server() {
   echo "[head] starting vLLM REST server ..."
-  singularity exec --bind $MOUNTS --nv --contain --writable-tmpfs --env VLLM_USE_PRECOMPILED=1 \
+  "$CONTAINER_RUNTIME" exec --bind $MOUNTS --nv --contain --writable-tmpfs --env VLLM_USE_PRECOMPILED=1 \
            instance://"$INSTANCE_TAG" \
 {% if cfg.watchdog is not defined or cfg.watchdog.enabled %}
            python3 /opt/watchdog.py \
@@ -262,7 +263,7 @@ start_ray_head
 wait_for_ray_ready
 start_ray_workers
 echo "[head] checking Ray status ..."
-singularity exec instance://"$INSTANCE_TAG" ray status
+"$CONTAINER_RUNTIME" exec instance://"$INSTANCE_TAG" ray status
 {% set _mon = cfg.backend.endpoint.monitoring %}
 {% if _mon.enabled and _mon.gpu_exporter.enabled %}
 # --- GPU exporter (one per node of the Ray allocation, in the job's GPU cgroup) ---
@@ -271,13 +272,13 @@ launch_gpu_exporter() {
   nvidia-smi --query-gpu=uuid --format=csv,noheader 2>/dev/null | tr -d ' ' \
     > "{{ swarm_directory }}/serving/gpu-owner-${REPL_ID}-$(hostname).txt" || true
 {% if _mon.gpu_exporter.kind == "dcgm" %}
-  singularity exec --nv \
+  "$CONTAINER_RUNTIME" exec --nv \
     --bind "{{ dcgm_core_counters_path }}:/etc/dcgm-exporter/core.csv" \
     "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
     dcgm-exporter -a ":{{ _mon.gpu_exporter.port }}" -f /etc/dcgm-exporter/core.csv \
     >> "$RAY_LOG_DIR/gpu_exporter.log" 2>&1 &
 {% elif _mon.mode == "container" %}
-  singularity exec --nv "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
+  "$CONTAINER_RUNTIME" exec --nv "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
     {{ _mon.gpu_exporter.resolved_binary(mode=_mon.mode) }} --web.listen-address=":{{ _mon.gpu_exporter.port }}" \
     >> "$RAY_LOG_DIR/gpu_exporter.log" 2>&1 &
 {% else %}
@@ -322,7 +323,7 @@ while true; do
   fi
 
   # 1) Check Ray health
-  if singularity exec instance://"$INSTANCE_TAG" ray status >/dev/null 2>&1; then
+  if "$CONTAINER_RUNTIME" exec instance://"$INSTANCE_TAG" ray status >/dev/null 2>&1; then
     consec_fail=0
   else
     consec_fail=$((consec_fail + 1))
