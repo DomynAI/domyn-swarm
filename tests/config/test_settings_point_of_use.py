@@ -44,11 +44,42 @@ def test_resolved_api_token_prefers_api_token(monkeypatch: pytest.MonkeyPatch) -
     assert token.get_secret_value() == "primary"
 
 
+def test_resolved_api_token_accepts_apptainer_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DOMYN_SWARM_API_TOKEN", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("SINGULARITYENV_VLLM_API_KEY", raising=False)
+    monkeypatch.setenv("APPTAINERENV_VLLM_API_KEY", "apptainer-token")
+    reload_settings_cache()
+
+    token = get_settings().resolved_api_token
+
+    assert token is not None
+    assert token.get_secret_value() == "apptainer-token"
+
+
+def test_resolved_api_token_keeps_singularity_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DOMYN_SWARM_API_TOKEN", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("APPTAINERENV_VLLM_API_KEY", raising=False)
+    monkeypatch.setenv("SINGULARITYENV_VLLM_API_KEY", "singularity-token")
+    reload_settings_cache()
+
+    token = get_settings().resolved_api_token
+
+    assert token is not None
+    assert token.get_secret_value() == "singularity-token"
+
+
 def test_resolved_api_token_is_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     """No token configured resolves to ``None`` rather than an empty secret."""
     monkeypatch.delenv("DOMYN_SWARM_API_TOKEN", raising=False)
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     monkeypatch.delenv("SINGULARITYENV_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("APPTAINERENV_VLLM_API_KEY", raising=False)
     reload_settings_cache()
 
     assert Settings().resolved_api_token is None

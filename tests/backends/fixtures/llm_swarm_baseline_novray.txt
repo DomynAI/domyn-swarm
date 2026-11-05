@@ -20,13 +20,27 @@ set -euo pipefail
 
 module purge
 
+if command -v apptainer >/dev/null 2>&1; then
+  DSWARM_CONTAINER_RUNTIME=apptainer
+  DSWARM_CONTAINER_RUNTIME_STATE_DIR="${APPTAINER_CONFIGDIR:-$HOME/.apptainer}"
+elif command -v singularity >/dev/null 2>&1; then
+  DSWARM_CONTAINER_RUNTIME=singularity
+  DSWARM_CONTAINER_RUNTIME_STATE_DIR="${SINGULARITY_CONFIGDIR:-$HOME/.singularity}"
+else
+  echo "ERROR: neither apptainer nor singularity is available on $(hostname)" >&2
+  exit 1
+fi
+
+export DSWARM_CONTAINER_RUNTIME
+export DSWARM_CONTAINER_RUNTIME_STATE_DIR
 ###############################################################################
 #  ENVIRONMENT VARIABLES
 ###############################################################################
 export VLLM_IMAGE="vllm.sif"
 export HF_HOME="/hf"
 
-# User-defined environment variables (to be passed to Singularity)
+# User-defined environment variables (to be passed to the container runtime)
+export APPTAINERENV_HF_HOME="/hf"
 export SINGULARITYENV_HF_HOME="/hf"
 export HF_HOME="/hf"
 export REPLICAS=4
@@ -49,7 +63,7 @@ export DSWARM_AGENT_VERSION=0.0.0
 export SWARM_DIR="/swarm"
 export LOG_DIR=/swarm/logs/replicas/replica-${REPL_ID}
 export VLLM_HOST_IP=$(hostname -I | awk '{print $1}')
-export VLLM_API_KEY="${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}"
+export VLLM_API_KEY="${APPTAINERENV_VLLM_API_KEY:-${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}}"
 mkdir -p "$LOG_DIR"
 
 ###############################################################################
@@ -123,7 +137,7 @@ function start_vllm_replica() {
   echo "VLLM logging will be written to $log_dir/vllm.log"
   srun --export=ALL -n1 -N1 -w $node --gres=gpu:1 \
      --cpus-per-task=8 \
-     singularity exec --bind $MOUNTS --nv --writable-tmpfs "$VLLM_IMAGE" \
+     "$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS --nv --writable-tmpfs "$VLLM_IMAGE" \
      python3 /opt/watchdog.py \
        \
       -- \
