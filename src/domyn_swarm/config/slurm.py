@@ -522,12 +522,13 @@ class SlurmConfig(BaseModel):
         def _validate_handle(handle: ServingHandle) -> None:
             """Reject a handle the Slurm serving backend could not query.
 
-            ``SlurmServingBackend.status()`` subscripts ``meta["jobid"]``
-            directly, so a handle without one -- a state record written before
-            the replica job existed, say -- would blow up with a bare KeyError
-            deep inside ``status()`` instead of here.
+            ``SlurmServingBackend.status()`` subscripts ``meta["jobid"]`` and
+            ``meta["lb_jobid"]`` directly, so a handle without them -- a state
+            record written before the jobs existed, say -- would blow up with a
+            bare KeyError deep inside ``status()`` instead of here. ``lb_node``
+            is not required: it appears only once the endpoint is ready.
             """
-            if handle.meta.get("jobid") is None:
+            if handle.meta.get("jobid") is None or handle.meta.get("lb_jobid") is None:
                 raise ValueError("State file does not contain valid job IDs")
 
         serving_spec = self.model_dump(exclude_none=True) | cfg_ctx.model_dump(

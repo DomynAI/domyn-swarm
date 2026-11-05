@@ -376,13 +376,18 @@ class DomynLLMSwarm(BaseModel):
     ) -> DomynLLMSwarm:
         """Build a complete swarm from persisted state.
 
+        The compute backend is not built here: a Slurm swarm whose endpoint
+        never became ready has no load-balancer node, and teardown and status
+        must still work for it. :meth:`_require_compute_backend` builds the
+        backend on first use.
+
         Args:
             swarm_payload: The persisted ``swarm`` column, without ``cfg``.
             cfg_payload: The persisted ``cfg`` column.
             handle_payload: The persisted ``serving_handle`` column.
 
         Returns:
-            A swarm with its handle adopted and its compute backend built.
+            A swarm with its handle adopted.
 
         Raises:
             ValueError: If the record's serving handle is missing metadata the
@@ -397,7 +402,6 @@ class DomynLLMSwarm(BaseModel):
 
         swarm.serving_handle = handle
         swarm._deployment.adopt(handle)
-        swarm._deployment.compute = swarm._plan.make_compute_backend(handle)
         return swarm
 
     def _delete_record(self) -> None:
@@ -818,9 +822,7 @@ class DomynLLMSwarm(BaseModel):
     def _compose_runtime(self, extra_env: dict | None = None):
         """Build interpreter/image/resources/env in one place."""
         self._deployment.ensure_ready()
-        assert self._deployment.compute is not None, "Compute backend not initialized"
-
-        compute = self._deployment.compute
+        compute = self._require_compute_backend()
         python_interpreter = compute.default_python(self.cfg)
         image = (
             self._plan.image
@@ -937,12 +939,16 @@ class DomynLLMSwarm(BaseModel):
             ),
         )
 
-    def _require_compute_backend(self):
-        """Return the initialized compute backend.
+    def _require_compute_backend(self) -> ComputeBackend:
+        """Return the compute backend, building it from the serving handle on first use.
 
         Raises:
-            RuntimeError: If compute backend is not initialized.
+            RuntimeError: If the swarm has no serving handle, or the platform
+                cannot build a compute backend from it because the endpoint is
+                not ready.
         """
+        if self._deployment.compute is None and self.serving_handle is not None:
+            self._deployment.compute = self._make_compute_backend(self.serving_handle)
         compute = self._deployment.compute
         if compute is None:
             raise RuntimeError("Compute backend is not initialized for this swarm.")
