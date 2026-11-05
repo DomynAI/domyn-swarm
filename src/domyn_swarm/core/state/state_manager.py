@@ -93,7 +93,7 @@ class SwarmStateManager:
             deployment_name: The deployment name to look up.
 
         Returns:
-            A fully-built :class:`DomynLLMSwarm`.
+            A :class:`DomynLLMSwarm` with its serving handle adopted.
 
         Raises:
             JobNotFoundError: If no record exists for that name.

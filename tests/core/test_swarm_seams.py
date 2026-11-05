@@ -154,10 +154,31 @@ def test_from_record_builds_a_complete_swarm(swarm: DomynLLMSwarm) -> None:
     assert loaded.serving_handle is not None
     assert loaded.serving_handle.id == "1234"
     assert loaded.platform == "slurm"
-    # The compute backend was built from the handle, not left as a placeholder.
-    assert loaded._deployment.compute is not None
-    assert loaded._deployment.compute.lb_jobid == 1234
-    assert loaded._deployment.compute.lb_node == "lrdn4759"
+    compute = loaded._require_compute_backend()
+    assert compute.lb_jobid == 1234
+    assert compute.lb_node == "lrdn4759"
+
+
+def test_down_stops_a_swarm_whose_endpoint_never_became_ready(
+    swarm: DomynLLMSwarm, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: loading a record without ``lb_node`` raised, so ``down`` cancelled nothing.
+
+    The load balancer reports its node only once it is healthy, so a swarm whose
+    replicas crash at startup is persisted without one.
+    """
+    from domyn_swarm.backends.serving import slurm as slurm_serving
+
+    assert swarm.serving_handle is not None
+    del swarm.serving_handle.meta["lb_node"]
+    swarm._state_mgr.save(deployment_name="swarm")
+    cancelled: list[str] = []
+    monkeypatch.setattr(slurm_serving, "_cancel_slurm", cancelled.append)
+
+    SwarmStateManager.load(deployment_name="swarm").down()
+
+    assert cancelled == ["5678", "1234"]
+    assert all(r["deployment_name"] != "swarm" for r in SwarmStateManager.list_all())
 
 
 def test_state_manager_does_not_touch_swarm_internals() -> None:
