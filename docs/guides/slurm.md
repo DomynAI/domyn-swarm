@@ -19,6 +19,27 @@ Three things happen:
    exposes one endpoint.
 3. A SQLite state record lets later commands address the swarm by name.
 
+## Running the load balancer with the replicas
+
+The load-balancer job holds a node of its own for Nginx, the health collector
+and batch jobs, none of which need a GPU. On clusters that allocate whole GPU
+nodes, `endpoint.colocate` runs them inside the replica job instead:
+
+```yaml
+backend:
+  type: slurm
+  endpoint:
+    colocate: true
+```
+
+The first array task then starts the load balancer on its first node, next to
+its replicas, and `up` submits a single job. Job steps from `job submit` run in
+that array task's allocation.
+
+The endpoint lives as long as that array task: if it fails, the endpoint goes
+with it, whereas a separate load-balancer job outlives its replicas.
+`endpoint.qos`, `threads_per_core` and `wall_time` do not apply.
+
 ## Building the container images
 
 domyn-swarm supports Apptainer and SingularityCE on Slurm. Jobs select

@@ -53,6 +53,9 @@ class SlurmServingBackend(ServingBackend):  # type: ignore[misc]
         replicas_per_node = spec.get("replicas_per_node", 1)
 
         swarm_directory = spec.get("swarm_directory", settings.home / "swarms" / name)
+        colocate = self.cfg.endpoint.colocate
+        if colocate:
+            self.driver.stage_colocated_endpoint(name, replicas, swarm_directory)
 
         try:
             jobid = self.driver.submit_replicas(
@@ -66,7 +69,13 @@ class SlurmServingBackend(ServingBackend):  # type: ignore[misc]
             )
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to submit replicas Slurm job: {e}") from e
-        lb_jobid = self.driver.submit_endpoint(name, jobid, replicas, swarm_directory)
+        # A colocated endpoint has no job of its own: until `wait_ready` reads the
+        # first array task's job ID, the replica job stands in for it.
+        lb_jobid = (
+            jobid
+            if colocate
+            else self.driver.submit_endpoint(name, jobid, replicas, swarm_directory)
+        )
         return ServingHandle(
             id=str(lb_jobid),
             url="",  # filled in wait_ready()
@@ -94,6 +103,11 @@ class SlurmServingBackend(ServingBackend):  # type: ignore[misc]
             poll_interval_s=self.cfg.endpoint.poll_interval,
             watchdog_db=watchdog_db,
             swarm_name=swarm_name,
+            endpoint_job_file=(
+                Path(handle.meta["swarm_directory"]) / "serving" / "endpoint.job"
+                if self.cfg.endpoint.colocate
+                else None
+            ),
         )
         return probe.wait_ready(handle, timeout_s)
 
@@ -102,7 +116,7 @@ class SlurmServingBackend(ServingBackend):  # type: ignore[misc]
         lb_jobid = handle.meta.get("lb_jobid")
         if jobid:
             _cancel_slurm(str(jobid))
-        if lb_jobid:
+        if lb_jobid and lb_jobid != jobid:
             _cancel_slurm(str(lb_jobid))
 
     def ensure_ready(self, handle: ServingHandle | None):
