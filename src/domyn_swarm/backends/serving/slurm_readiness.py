@@ -50,6 +50,7 @@ class SlurmReadiness(ServingReadiness):
         console: Console | None = None,
         watchdog_db: Path | None = None,
         swarm_name: str | None = None,
+        endpoint_job_file: Path | None = None,
     ):
         self.driver = driver
         self.endpoint_port = endpoint_port
@@ -57,6 +58,7 @@ class SlurmReadiness(ServingReadiness):
         self.console = console or Console()
         self.watchdog_db = watchdog_db
         self.swarm_name = swarm_name
+        self.endpoint_job_file = endpoint_job_file
         self.last_status_tuple: tuple[int, int, int, int] | None = (
             None  # total, running, http_ready, failed
         )
@@ -69,6 +71,10 @@ class SlurmReadiness(ServingReadiness):
 
         with self.console.status("[bold green]Waiting for LB and replicas to start...") as status:
             self._wait_jobs_running(jobid, lb_jobid, status)
+            if self.endpoint_job_file is not None:
+                handle.meta["lb_jobid"], handle.meta["lb_node"] = self._wait_endpoint_job(
+                    jobid, status
+                )
             lb_node = handle.meta.get("lb_node") or self.driver.get_node_from_jobid(lb_jobid)
             handle.meta["lb_node"] = lb_node
             status.update(f"[yellow]LB job running on {lb_node}, probing HTTP…")
@@ -106,6 +112,23 @@ class SlurmReadiness(ServingReadiness):
             elif rep == "RUNNING" and lb == "RUNNING":
                 return
             time.sleep(self.poll_interval_s)
+
+    def _wait_endpoint_job(self, jobid: int, status: Status) -> tuple[int, str]:
+        """Wait for the replica job to report where its colocated load balancer runs.
+
+        The first array task writes ``<its job ID> <its node>`` to the endpoint job
+        file before it starts the load balancer. Job steps target that task's job
+        ID: the array job ID does not identify a single allocation.
+        """
+        assert self.endpoint_job_file is not None
+        status.update("[yellow]Waiting for the replica job to start the load balancer …")
+        while not self.endpoint_job_file.exists():
+            state = self.driver.get_job_state(jobid)
+            if state in SLURM_BAD_STATES:
+                raise RuntimeError(f"Replica array ended in {state}")
+            time.sleep(self.poll_interval_s)
+        task_jobid, node = self.endpoint_job_file.read_text().split()
+        return int(task_jobid), node
 
     def _watchdog_probe(self, status: Status) -> None:
         """
