@@ -437,6 +437,18 @@ class SlurmConfig(BaseModel):
         default=None,
         description=("Virtual environment used by the driver process, not by the containers."),
     )
+    vllm_venv: utils.EnvPath | None = Field(
+        default=None,
+        description=(
+            "Virtual environment with vLLM installed, on a filesystem the compute "
+            "nodes share. When set, replicas run `vllm serve` from it directly on the "
+            "nodes instead of inside `image`, with its `bin` directory first on "
+            "`PATH`, and the load balancer runs its helper scripts with its Python. "
+            "Nginx still runs from `endpoint.nginx_image`, and `mounts` and "
+            "`system_mounts` do not apply. Not supported when a replica spans "
+            "several nodes."
+        ),
+    )
     env: dict[str, str] | None = Field(
         default=None,
         description=("Additional environment variables set on every job this backend submits."),
