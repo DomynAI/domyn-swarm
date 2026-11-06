@@ -38,7 +38,11 @@ module purge
 module load {{ mod }}
 {% endfor %}
 
+{% if cfg.backend.vllm_venv %}
+export PATH="{{ cfg.backend.vllm_venv }}/bin:$PATH"
+{% else %}
 {% include "_container_runtime.sh.j2" %}
+{% endif %}
 
 ###############################################################################
 #  ENVIRONMENT VARIABLES
