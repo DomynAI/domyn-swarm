@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025-2026 Domyn
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from pathlib import Path
 import time
 
@@ -50,6 +51,7 @@ class SlurmReadiness(ServingReadiness):
         console: Console | None = None,
         watchdog_db: Path | None = None,
         swarm_name: str | None = None,
+        endpoint_job_file: Path | None = None,
     ):
         self.driver = driver
         self.endpoint_port = endpoint_port
@@ -57,6 +59,7 @@ class SlurmReadiness(ServingReadiness):
         self.console = console or Console()
         self.watchdog_db = watchdog_db
         self.swarm_name = swarm_name
+        self.endpoint_job_file = endpoint_job_file
         self.last_status_tuple: tuple[int, int, int, int] | None = (
             None  # total, running, http_ready, failed
         )
@@ -69,6 +72,12 @@ class SlurmReadiness(ServingReadiness):
 
         with self.console.status("[bold green]Waiting for LB and replicas to start...") as status:
             self._wait_jobs_running(jobid, lb_jobid, status)
+            # Queue time is not bounded; the endpoint gets `timeout_s` once its jobs run.
+            deadline = time.monotonic() + timeout_s
+            if self.endpoint_job_file is not None:
+                handle.meta["lb_jobid"], handle.meta["lb_node"] = self._wait_endpoint_job(
+                    jobid, status, deadline
+                )
             lb_node = handle.meta.get("lb_node") or self.driver.get_node_from_jobid(lb_jobid)
             handle.meta["lb_node"] = lb_node
             status.update(f"[yellow]LB job running on {lb_node}, probing HTTP…")
@@ -80,7 +89,7 @@ class SlurmReadiness(ServingReadiness):
 
             wait_http_200(
                 f"{base}/health",
-                timeout_s=timeout_s,
+                timeout_s=max(0, math.ceil(deadline - time.monotonic())),
                 poll_interval_s=self.poll_interval_s,
                 on_tick=_watchdog_tick,
             )
@@ -106,6 +115,44 @@ class SlurmReadiness(ServingReadiness):
             elif rep == "RUNNING" and lb == "RUNNING":
                 return
             time.sleep(self.poll_interval_s)
+
+    def _wait_endpoint_job(self, jobid: int, status: Status, deadline: float) -> tuple[int, str]:
+        """Wait for the replica job to report where its colocated load balancer runs.
+
+        The first array task writes ``<array job ID> <its job ID> <its node>`` to the
+        endpoint job file before it starts the load balancer. Job steps target that
+        task's job ID: the array job ID does not identify a single allocation.
+        Records from another array job are ignored.
+
+        Raises:
+            RuntimeError: The replica job ended before writing the record.
+            TimeoutError: No record appeared before ``deadline`` (``time.monotonic``).
+        """
+        assert self.endpoint_job_file is not None
+        status.update("[yellow]Waiting for the replica job to start the load balancer …")
+        while (record := self._read_endpoint_job(jobid)) is None:
+            state = self.driver.get_job_state(jobid)
+            if state in SLURM_BAD_STATES or state == "COMPLETED":
+                raise RuntimeError(
+                    f"Replica array ended in {state} before starting the load balancer"
+                )
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Replica job {jobid} did not start the load balancer: "
+                    f"no record in {self.endpoint_job_file}"
+                )
+            time.sleep(self.poll_interval_s)
+        return record
+
+    def _read_endpoint_job(self, jobid: int) -> tuple[int, str] | None:
+        assert self.endpoint_job_file is not None
+        try:
+            fields = self.endpoint_job_file.read_text().split()
+        except FileNotFoundError:
+            return None
+        if len(fields) != 3 or fields[0] != str(jobid):
+            return None
+        return int(fields[1]), fields[2]
 
     def _watchdog_probe(self, status: Status) -> None:
         """

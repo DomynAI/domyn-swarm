@@ -3,6 +3,7 @@
 
 from importlib import resources
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
@@ -20,6 +21,14 @@ import domyn_swarm.runtime.watchdog as watchdog_mod
 import domyn_swarm.runtime.watchdog_args as watchdog_args_mod
 
 logger = setup_logger(__name__)
+
+
+def endpoint_job_file(swarm_directory: str | Path) -> Path:
+    """Return where a colocated load balancer's replica task records its location.
+
+    The first array task writes ``<array job ID> <its job ID> <its node>`` there.
+    """
+    return Path(swarm_directory) / "serving" / "endpoint.job"
 
 
 class SlurmDriver:
@@ -98,6 +107,33 @@ class SlurmDriver:
         self, job_name: str, dep_jobid: int, replicas: int, swarm_directory: str
     ) -> int:
         """Submit the load balancer job to Slurm with a dependency on the replica array job."""
+        script_path = self._write_endpoint_script(job_name, replicas, swarm_directory)
+        cmd = [
+            "sbatch",
+            "--parsable",
+            "--dependency",
+            f"after:{dep_jobid}",
+            "--export",
+            f"ALL,DEP_JOBID={dep_jobid}",
+            script_path,
+        ]
+        out = subprocess.check_output(cmd, text=True).strip()
+        logger.info(f"Submitted load balancer job {out} with command: {' '.join(cmd)}")
+        return int(out)
+
+    def stage_colocated_endpoint(self, job_name: str, replicas: int, swarm_directory: str) -> None:
+        """Write the load-balancer script that the replica job starts itself.
+
+        Must run before the replicas are submitted: the first array task starts
+        `serving/lb.sh` as soon as it runs. Removes the endpoint record of a
+        previous deployment in the same directory so readiness cannot read it.
+        """
+        endpoint_job_file(swarm_directory).unlink(missing_ok=True)
+        script_path = self._write_endpoint_script(job_name, replicas, swarm_directory)
+        shutil.move(script_path, Path(swarm_directory) / "serving" / "lb.sh")
+
+    def _write_endpoint_script(self, job_name: str, replicas: int, swarm_directory: str) -> str:
+        """Render the nginx and Prometheus configs and the LB script; return the script path."""
         assert isinstance(self.cfg.backend, SlurmConfig)
 
         env = jinja2.Environment(
@@ -141,7 +177,6 @@ class SlurmDriver:
         lb_script_txt = env.get_template("lb.sh.j2").render(
             cfg=self.cfg,
             job_name=job_name,
-            dep_jobid=dep_jobid,
             replicas=replicas,
             swarm_directory=swarm_directory,
             collector_script_path=Path(collector_mod.__file__).resolve().as_posix(),
@@ -150,20 +185,7 @@ class SlurmDriver:
 
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sbatch") as fh:
             fh.write(lb_script_txt)
-            script_path = fh.name
-
-        cmd = [
-            "sbatch",
-            "--parsable",
-            "--dependency",
-            f"after:{dep_jobid}",
-            "--export",
-            f"ALL,DEP_JOBID={dep_jobid}",
-            script_path,
-        ]
-        out = subprocess.check_output(cmd, text=True).strip()
-        logger.info(f"Submitted load balancer job {out} with command: {' '.join(cmd)}")
-        return int(out)
+            return fh.name
 
     def get_node_from_jobid(self, jobid: int) -> str:
         """Get the head node of the job given its job ID."""

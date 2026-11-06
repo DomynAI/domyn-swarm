@@ -78,6 +78,9 @@ function wait_for_vllm_ready() {
     fi
 
     echo "[head] $endpoint not ready (code=$code), retrying..."
+{% if cfg.backend.endpoint.colocate %}
+    check_colocated_lb
+{% endif %}
     sleep 5
   done
 }
@@ -171,5 +174,8 @@ trap 'echo "[batch] caught SIGTERM → shutting down"; exit 0' SIGTERM
 
 # Keep job alive
 while true; do
+{% if cfg.backend.endpoint.colocate %}
+  check_colocated_lb
+{% endif %}
   sleep 60
 done

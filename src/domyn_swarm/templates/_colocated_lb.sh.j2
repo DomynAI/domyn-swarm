@@ -1,0 +1,31 @@
+# The load balancer runs in the first array task instead of a job of its own.
+LB_PID=""
+
+stop_colocated_lb() {
+  [[ -n "$LB_PID" ]] || return 0
+  kill "$LB_PID" 2>/dev/null || true
+  wait "$LB_PID" 2>/dev/null || true
+  LB_PID=""
+}
+
+# Without the load balancer the endpoint is unreachable, so the whole array is
+# cancelled instead of holding its allocation.
+check_colocated_lb() {
+  [[ -n "$LB_PID" ]] || return 0
+  kill -0 "$LB_PID" 2>/dev/null && return 0
+  LB_PID=""
+  echo "[replica $REPL_ID] load balancer exited, see logs/endpoint/lb.err; cancelling job $REPL_JOB_ID" >&2
+  scancel "$REPL_JOB_ID" || true
+  exit 1
+}
+
+trap stop_colocated_lb EXIT
+
+if [[ "$REPL_ID" == 0 ]]; then
+  ENDPOINT_JOB="{{ swarm_directory }}/serving/endpoint.job"
+  echo "$REPL_JOB_ID $SLURM_JOB_ID $HEAD_NODE" > "$ENDPOINT_JOB.tmp" && mv "$ENDPOINT_JOB.tmp" "$ENDPOINT_JOB"
+  mkdir -p "{{ swarm_directory }}/logs/endpoint"
+  DEP_JOBID=$SLURM_JOB_ID bash "{{ swarm_directory }}/serving/lb.sh" \
+    > "{{ swarm_directory }}/logs/endpoint/lb.out" 2> "{{ swarm_directory }}/logs/endpoint/lb.err" &
+  LB_PID=$!
+fi
