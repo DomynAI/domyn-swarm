@@ -3,6 +3,7 @@
 
 from pydantic import ValidationError
 import pytest
+import yaml
 
 from domyn_swarm.config.slurm import GpuExporterConfig, MonitoringConfig, SlurmEndpointConfig
 
@@ -111,3 +112,55 @@ def test_ray_metrics_defaults():
     m = MonitoringConfig()
     assert m.ray_metrics.enabled is None
     assert m.ray_metrics.port == 8090
+
+
+@pytest.mark.parametrize(
+    ("default_enabled", "monitoring", "gpus_per_replica", "expected"),
+    [
+        (True, None, 4, True),
+        (True, {}, 8, True),
+        (True, {"enabled": False}, 8, False),
+        (False, {"enabled": True}, 4, True),
+        ("false", None, 4, False),
+    ],
+)
+def test_swarm_inherits_monitoring_enabled(
+    monkeypatch, tmp_path, default_enabled, monitoring, gpus_per_replica, expected
+):
+    from domyn_swarm.config.swarm import DomynLLMSwarmConfig
+
+    defaults = tmp_path / "defaults.yaml"
+    defaults.write_text(
+        yaml.safe_dump(
+            {
+                "slurm": {"endpoint": {"monitoring": {"enabled": default_enabled}}},
+            }
+        )
+    )
+    monkeypatch.setenv("DOMYN_SWARM_DEFAULTS", str(defaults))
+    endpoint = {"nginx_image": "nginx.sif"}
+    if monitoring is not None:
+        endpoint["monitoring"] = monitoring
+    swarm = tmp_path / "swarm.yaml"
+    swarm.write_text(
+        yaml.safe_dump(
+            {
+                "name": "monitoring-defaults",
+                "model": "model",
+                "image": "vllm.sif",
+                "gpus_per_replica": gpus_per_replica,
+                "backend": {
+                    "type": "slurm",
+                    "account": "account",
+                    "partition": "partition",
+                    "qos": "qos",
+                    "endpoint": endpoint,
+                },
+            }
+        )
+    )
+    cfg = DomynLLMSwarmConfig.read(str(swarm))
+    assert cfg.backend.endpoint.monitoring.enabled is expected
+    assert cfg.backend.endpoint.monitoring.ray_metrics.enabled is (
+        expected and gpus_per_replica > 4
+    )
