@@ -104,10 +104,13 @@ class MonitoringConfig(BaseModel):
     """
 
     enabled: bool = Field(
-        default=False,
+        default_factory=default_for("slurm.endpoint.monitoring.enabled", False),
+        validate_default=True,
         description=(
             "Run Prometheus and an Nginx exporter alongside the load balancer. "
-            "Master switch: with it off, every other field here is ignored."
+            "Master switch: with it off, every other field here is ignored. "
+            "Defaults to `slurm.endpoint.monitoring.enabled` in defaults.yaml, "
+            "or false when that key is absent."
         ),
     )
     mode: Literal["container", "binary"] = Field(
