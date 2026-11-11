@@ -94,6 +94,9 @@ function wait_for_ray_ready() {
   echo "[head] waiting for Ray to come up ..."
   until "$DSWARM_CONTAINER_RUNTIME" exec instance://"$INSTANCE_TAG" ray status &>/dev/null; do
     "$DSWARM_CONTAINER_RUNTIME" exec instance://"$INSTANCE_TAG" env | grep VLLM_HOST_IP
+{% if cfg.backend.endpoint.colocate %}
+    check_colocated_lb
+{% endif %}
     sleep 2
   done
   echo "[head] Ray OK"
@@ -213,6 +216,9 @@ function wait_for_vllm_server_ready() {
     fi
 
     echo "[head] waiting for vLLM (code=$code)…"
+{% if cfg.backend.endpoint.colocate %}
+    check_colocated_lb
+{% endif %}
     sleep 5
   done
 
@@ -242,8 +248,13 @@ _cleanup_monitoring() {
 _on_exit() {
   final_sync_ray_logs
   _cleanup_monitoring
+{% if cfg.backend.endpoint.colocate %}
+  stop_colocated_lb
+{% endif %}
 }
 trap _on_exit EXIT
+{% elif cfg.backend.endpoint.colocate %}
+trap 'final_sync_ray_logs; stop_colocated_lb' EXIT
 {% else %}
 trap final_sync_ray_logs EXIT
 {% endif %}
@@ -354,6 +365,10 @@ while true; do
     requeue_this_job
   fi
 
+{% if cfg.backend.endpoint.colocate %}
+  check_colocated_lb
+
+{% endif %}
   # 2) Best-effort: sync Ray logs to shared FS (non-blocking-ish)
   sync_ray_logs_from_node "$HEAD_NODE" "$LOCAL_RAY_LOGS" "$SHARED_RAY_LOGS" "$USER"
 

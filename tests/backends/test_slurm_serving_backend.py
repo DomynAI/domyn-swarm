@@ -15,7 +15,8 @@ class FakeDriver:
     def __init__(self, submit_jobid=111, submit_lb_jobid=222):
         self.submit_jobid = submit_jobid
         self.submit_lb_jobid = submit_lb_jobid
-        self.calls = {"submit_replicas": None, "submit_endpoint": None}
+        self.calls = {"submit_replicas": None, "submit_endpoint": None, "stage": None}
+        self.order = []
 
     def submit_replicas(
         self,
@@ -27,6 +28,7 @@ class FakeDriver:
         replicas_per_node,
         swarm_directory,
     ):
+        self.order.append("submit_replicas")
         self.calls["submit_replicas"] = {
             "name": name,
             "replicas": replicas,
@@ -47,11 +49,15 @@ class FakeDriver:
         }
         return self.submit_lb_jobid
 
+    def stage_colocated_endpoint(self, name, replicas, swarm_directory):
+        self.order.append("stage")
+        self.calls["stage"] = {"name": name, "replicas": replicas}
 
-def mk_cfg(port=9000, poll=10, swarm_directory=None):
+
+def mk_cfg(port=9000, poll=10, swarm_directory=None, colocate=False):
     if swarm_directory is None:
         swarm_directory = "/home/user/swarms/my-swarm"
-    endpoint = SimpleNamespace(port=port, poll_interval=poll)
+    endpoint = SimpleNamespace(port=port, poll_interval=poll, colocate=colocate)
     return SimpleNamespace(endpoint=endpoint, swarm_directory=swarm_directory)
 
 
@@ -137,12 +143,15 @@ def test_wait_ready_constructs_probe_with_cfg_values(monkeypatch):
     constructed = {}
 
     class FakeProbeCtor:
-        def __init__(self, driver, endpoint_port, poll_interval_s, watchdog_db, swarm_name):
+        def __init__(
+            self, driver, endpoint_port, poll_interval_s, watchdog_db, swarm_name, endpoint_job_file
+        ):
             constructed["driver"] = driver
             constructed["endpoint_port"] = endpoint_port
             constructed["poll_interval_s"] = poll_interval_s
             constructed["watchdog_db"] = watchdog_db
             constructed["swarm_name"] = swarm_name
+            constructed["endpoint_job_file"] = endpoint_job_file
 
         def wait_ready(self, handle, timeout_s):
             handle.url = f"http://lb:{constructed['endpoint_port']}"
@@ -166,6 +175,7 @@ def test_wait_ready_constructs_probe_with_cfg_values(monkeypatch):
     assert constructed["poll_interval_s"] == 1.5
     assert constructed["watchdog_db"] == Path("swarm-directory/watchdog.db")
     assert constructed["swarm_name"] == "my-swarm"
+    assert constructed["endpoint_job_file"] is None
     # watchdog_db should be derived from default swarm_directory in cfg
     assert out.url == "http://lb:8123"
     assert out.meta["lb_node"] == "lb"
@@ -326,3 +336,47 @@ def test_status_running_sets_url_and_uses_existing_lb_node(mocker):
     assert h.url == "http://nZZ:9001"
     req.get.assert_called_once()
     assert req.get.call_args.kwargs.get("timeout") in (1.5, 1, 2)  # small timeout
+
+
+def test_colocated_endpoint_is_staged_before_replicas_and_not_submitted(tmp_path):
+    driver = FakeDriver(submit_jobid=101)
+    be = SlurmServingBackend(driver=driver, cfg=mk_cfg(colocate=True))
+
+    handle = be.create_or_update("my-swarm", {"replicas": 2, "swarm_directory": tmp_path}, {})
+
+    assert driver.order == ["stage", "submit_replicas"]
+    assert driver.calls["submit_endpoint"] is None
+    assert handle.meta["jobid"] == handle.meta["lb_jobid"] == 101
+
+
+def test_colocated_wait_ready_reads_the_endpoint_job_file(monkeypatch, tmp_path):
+    constructed = {}
+
+    class FakeProbeCtor:
+        def __init__(self, **kwargs):
+            constructed.update(kwargs)
+
+        def wait_ready(self, handle, timeout_s):
+            return handle
+
+    monkeypatch.setattr(mod, "SlurmReadiness", FakeProbeCtor)
+    be = SlurmServingBackend(driver=FakeDriver(), cfg=mk_cfg(colocate=True))
+    handle = ServingHandle(
+        id="101",
+        url="",
+        meta={"jobid": 101, "lb_jobid": 101, "name": "s", "swarm_directory": str(tmp_path)},
+    )
+
+    be.wait_ready(handle, 5, {})
+
+    assert constructed["endpoint_job_file"] == tmp_path / "serving" / "endpoint.job"
+
+
+def test_delete_cancels_a_colocated_swarm_once(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mod, "_cancel_slurm", calls.append)
+    be = SlurmServingBackend(driver=FakeDriver(), cfg=mk_cfg(colocate=True))
+
+    be.delete(serving_handle(jobid=101, lb_jobid=101))
+
+    assert calls == ["101"]

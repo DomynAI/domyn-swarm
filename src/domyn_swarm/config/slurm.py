@@ -314,6 +314,17 @@ class SlurmEndpointConfig(BaseModel):
             "override both."
         ),
     )
+    colocate: bool = Field(
+        default=False,
+        description=(
+            "Run the load balancer inside the replica job, on the first node of its "
+            "first array task, instead of in a job of its own. Saves the node the "
+            "separate job would hold, at the cost of the endpoint ending with that "
+            "array task. `qos`, `threads_per_core` and `wall_time` then do not "
+            "apply, and job steps run in that array task's allocation, still sized "
+            "by `cpus_per_task` and `mem`."
+        ),
+    )
     monitoring: MonitoringConfig = Field(
         default_factory=MonitoringConfig,
         description=(

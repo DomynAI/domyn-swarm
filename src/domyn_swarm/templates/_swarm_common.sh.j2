@@ -127,9 +127,16 @@ MOUNTS=$MOUNTS,{{ mount }}
 MOUNTS=$MOUNTS,$LOCAL_RAY_LOGS:/tmp/ray
 {% endif %}
 
+{% if cfg.backend.endpoint.colocate %}
+{% include "_colocated_lb.sh.j2" %}
+
+{% endif %}
 #Wait for creation of file "SWARM_DIR/serving/collector.env" containing COLLECTOR_HOST and COLLECTOR_PORT
 echo "[replica $REPL_ID] waiting for collector.env file..."
 while [ ! -f "{{ swarm_directory }}/serving/collector.env" ]; do
+{% if cfg.backend.endpoint.colocate %}
+    check_colocated_lb
+{% endif %}
     sleep 2
 done
 
