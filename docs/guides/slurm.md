@@ -41,7 +41,7 @@ Then add the image paths to the configuration:
 
 ```yaml
 model: "deepseek-ai/DeepSeek-R1-0528"  # whatever model you want to deploy
-image: /shared/images/vllm.sif         # vLLM container; optional if you run from a venv
+image: /shared/images/vllm.sif         # vLLM container; optional with backend.vllm_venv
 backend:
   type: slurm
   endpoint:
@@ -55,7 +55,43 @@ Practical notes:
 - If your site disables `--fakeroot`, build with admin privileges elsewhere and
   copy the `.sif` onto the shared filesystem.
 - `image` is optional if you run vLLM from a virtual environment instead of a
-  container. `endpoint.nginx_image` is always required.
+  container, as described in
+  [Running vLLM without a container](#running-vllm-without-a-container).
+  `endpoint.nginx_image` is always required.
+
+## Running vLLM without a container
+
+`backend.vllm_venv` runs the replicas directly on the compute nodes from a
+virtual environment with vLLM installed, instead of inside `image`:
+
+```yaml
+model: /shared/models/my-model
+backend:
+  type: slurm
+  vllm_venv: /shared/venvs/vllm  # must contain bin/vllm
+  endpoint:
+    nginx_image: /shared/images/nginx.sif
+```
+
+With `vllm_venv` set:
+
+- Each replica runs `vllm serve` with `<vllm_venv>/bin` first on `PATH`, so
+  tools that vLLM calls at runtime, such as `ninja`, come from the same
+  environment.
+- The replica watchdog and the load balancer's collector and supervisor run
+  with the environment's Python, from the same `domyn_swarm` installation
+  paths that container mode bind-mounts.
+- Nginx still runs from `endpoint.nginx_image`.
+- `image` is ignored, so a site-wide default image does not need unsetting.
+  `mounts` and `system_mounts` do not apply: the replicas see the node's own
+  filesystem.
+- Set `HF_HOME` in `env`: as in container mode, the replica job exports it
+  from there, empty when unset.
+
+The environment must sit on a filesystem every compute node can read, and its
+Python and CUDA build must match the nodes. Before submitting, `up` checks that
+`<vllm_venv>/bin/vllm` exists. Replicas larger than one node are not
+supported: they need `image`.
 
 ## Path validation before submission
 

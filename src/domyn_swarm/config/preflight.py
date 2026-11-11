@@ -181,7 +181,10 @@ def check_config_paths(cfg: Any) -> list[PathProblem]:
 
     problems: list[PathProblem] = []
 
-    _check(problems, "image", getattr(cfg, "image", None))
+    if backend.vllm_venv is None:
+        _check(problems, "image", getattr(cfg, "image", None))
+    else:
+        _check(problems, "backend.vllm_venv", backend.vllm_venv / "bin" / "vllm", kind="file")
     _check(problems, "model", getattr(cfg, "model", None))
 
     endpoint = backend.endpoint

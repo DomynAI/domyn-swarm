@@ -30,9 +30,11 @@ function start_vllm_replica() {
 {% endif %}
   srun --export=ALL -n1 -N1 -w $node --gres=gpu:{{ cfg.gpus_per_replica }} \
      --cpus-per-task={{ cfg.cpus_per_task }} \
+{% if not cfg.backend.vllm_venv %}
      "$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS --nv --writable-tmpfs "$VLLM_IMAGE" \
+{% endif %}
 {% if cfg.watchdog is not defined or cfg.watchdog.enabled %}
-     python3 /opt/watchdog.py \
+     python3 {{ watchdog_script_path if cfg.backend.vllm_venv else "/opt/watchdog.py" }} \
       {{ args_to_str(build_watchdog_args(
         cfg.watchdog,
         swarm_id=job_name,

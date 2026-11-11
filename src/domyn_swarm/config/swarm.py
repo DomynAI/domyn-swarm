@@ -100,11 +100,13 @@ class DomynLLMSwarmConfig(BaseModel):
         ),
     )
 
-    image: str | utils.EnvPath = Field(
-        default_factory=default_for("image"),
+    image: str | utils.EnvPath | None = Field(
+        default_factory=default_for("image", None),
         description=(
             "Container image for the vLLM replicas: a path to a Singularity image "
-            "on the Slurm backend, or a Docker image on Lepton."
+            "on the Slurm backend, or a Docker image on Lepton. Required on Slurm "
+            "unless `backend.vllm_venv` is set, which runs vLLM without a container "
+            "and ignores this field."
         ),
     )
 
@@ -285,6 +287,33 @@ class DomynLLMSwarmConfig(BaseModel):
             rm = be.endpoint.monitoring.ray_metrics
             if rm.enabled is None:
                 rm.enabled = bool(be.endpoint.monitoring.enabled and be.requires_ray)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_slurm_vllm_runtime(self) -> "DomynLLMSwarmConfig":
+        """Require a source of vLLM on Slurm: `image`, or `backend.vllm_venv`.
+
+        `backend.vllm_venv` takes precedence over `image` so that a site-wide
+        default image does not have to be unset for a bare-metal deployment.
+        """
+        from domyn_swarm.config.slurm import SlurmConfig
+
+        be = self.backend
+        if not isinstance(be, SlurmConfig):
+            return self
+        if be.vllm_venv is None:
+            if not self.image:
+                raise ValueError(
+                    "Missing required configuration key: image. Set it to a vLLM "
+                    "Singularity image, or set backend.vllm_venv to run vLLM from a "
+                    "virtual environment without a container."
+                )
+            return self
+        if be.requires_ray:
+            raise ValueError(
+                "backend.vllm_venv does not support replicas spanning several nodes "
+                "(gpus_per_replica > gpus_per_node); use image instead."
+            )
         return self
 
 
