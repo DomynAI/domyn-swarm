@@ -213,6 +213,7 @@ def test_lb_gates_startup_on_a_listening_collector():
     assert "collector_wait_ready()" in out
     assert "collector_start_or_die" in out
     assert '--ready-file "$COLLECTOR_READY_FILE"' in out
+    assert out.index("\ncollector_start_or_die\n") < out.index("\ncollector_publish_env\n")
 
 
 def _cfg_with_monitoring(enabled: bool):

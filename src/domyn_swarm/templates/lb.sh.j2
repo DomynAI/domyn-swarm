@@ -35,6 +35,7 @@ COLLECTOR_PORT="${COLLECTOR_PORT:-{{ cfg.backend.endpoint.collector_port }}}"
 COLLECTOR_HOST="$(hostname -f)"
 COLLECTOR_LOG="$HOST_DIR/logs/collector.log"
 COLLECTOR_READY_FILE="$HOST_DIR/run/collector.ready"
+COLLECTOR_ENV_FILE="$SERVING_DIR/collector.env"
 
 mkdir -p "$HOST_DIR" "$SERVING_DIR" "$HOST_DIR/run" "$HOST_DIR/logs"
 
@@ -81,12 +82,7 @@ collector_cmd() {
 
 {% include "_collector.sh.j2" %}
 
-# Replicas block until this file exists, so write it up front: a collector that
-# fails to start takes the whole job down a few lines below anyway.
-{
-    echo "COLLECTOR_HOST=$COLLECTOR_HOST"
-    echo "COLLECTOR_PORT=$COLLECTOR_PORT"
-} > "$SERVING_DIR/collector.env"
+{% include "_collector_env.sh.j2" %}
 
 lb_cleanup() {
   echo "[lb] shutting down"
@@ -105,6 +101,7 @@ trap lb_cleanup EXIT
 trap 'exit 0' SIGTERM
 
 collector_start_or_die
+collector_publish_env
 
 echo "[lb] waiting for $REPLICAS head files from job $DEP_JOBID"
 t0=$(date +%s)
