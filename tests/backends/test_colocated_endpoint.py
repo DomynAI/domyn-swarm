@@ -115,6 +115,8 @@ def test_replica_script_checks_the_load_balancer_until_it_ends(tmp_path, ray):
 
     keep_alive = script.index("entering Ray + vLLM health loop" if ray else "# Keep job alive")
     assert "check_colocated_lb" in script[keep_alive:]
+    assert "until collector_load_env; do" in script
+    assert "COLLECTOR_RESTART_COUNT" in script
     assert script.count("check_colocated_lb") >= 3
     result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
