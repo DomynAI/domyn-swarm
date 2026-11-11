@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: 2025-2026 Domyn
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from unittest.mock import ANY, MagicMock, patch
 
 import jinja2
 import pytest
 
+from domyn_swarm.backends.serving import slurm_driver as slurm_driver_mod
 from domyn_swarm.backends.serving.slurm_driver import SlurmDriver
+from domyn_swarm.config.router import VllmRouter
 from domyn_swarm.config.slurm import (
     SlurmConfig,
     SlurmEndpointConfig,
@@ -148,3 +151,24 @@ def test_submit_endpoint_writes_static_server_conf(mock_check_output, slurm_driv
     server_conf = swarm_dir / "serving" / "10-server.conf"
     assert server_conf.exists()
     assert "proxy_pass http://llm;" in server_conf.read_text()
+
+
+@patch("domyn_swarm.backends.serving.slurm_driver.subprocess.check_output")
+@patch("domyn_swarm.backends.serving.slurm_driver.jinja2.Environment.get_template")
+def test_consistent_hash_logs_warning(
+    mock_get_template, mock_check_output, dummy_config, tmp_path, caplog, monkeypatch
+):
+    monkeypatch.setattr(slurm_driver_mod.logger, "propagate", True)
+    mock_get_template.return_value.render.return_value = "#!/bin/bash\necho lb"
+    mock_check_output.return_value = "67890"
+    dummy_config.backend.endpoint.router = VllmRouter(
+        binary="vllm-router", policy="consistent_hash"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        SlurmDriver(cfg=dummy_config).submit_endpoint("job", 12345, 2, str(tmp_path))
+
+    assert (
+        "vllm-router consistent_hash sends every request without a session ID to one replica"
+        in caplog.text
+    )

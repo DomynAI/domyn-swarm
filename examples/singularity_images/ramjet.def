@@ -1,0 +1,10 @@
+# ramjet for `backend.endpoint.router` with `type: ramjet`.
+# Build: sudo singularity build ramjet_0.8.0.sif ramjet.def
+# The image is distroless and has no shell. Domyn Swarm starts it with
+# `singularity run`, which runs the image entrypoint, and configures it through
+# RJ_* environment variables. The v0.8.0 image is published for linux/amd64 only.
+Bootstrap: docker
+From: ghcr.io/helixml/ramjet:v0.8.0
+
+%labels
+    Version 0.8.0

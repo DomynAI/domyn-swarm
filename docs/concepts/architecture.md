@@ -106,9 +106,9 @@ must converge as locations become available.
 
 Each replica writes a `replica-<id>.head` file, holding its `host:port`, into the
 swarm's shared serving directory. A supervisor process watches that directory
-and regenerates `00-upstreams.conf` from the current files. It also writes
-Prometheus target files when monitoring is on. A file addition or removal
-represents a replica change.
+and regenerates `00-upstreams.conf` from the current files. It also writes the
+replica list to `replicas.txt`. If monitoring is on, it writes Prometheus target
+files too. A file addition or removal represents a replica change.
 
 The supervisor writes files but does not reload Nginx. Nginx runs in a separate
 Singularity instance with a private PID namespace. A process in another
@@ -116,6 +116,21 @@ container cannot signal the Nginx master. The load-balancer script watches the
 generated file on the host. After a change, it runs `nginx -t` and then
 `nginx -s reload` through `singularity exec instance://`. It does not load an
 invalid configuration.
+
+A router can run behind Nginx on `127.0.0.1`. Nginx serves the public endpoint
+and sends requests to the router through its `llm` upstream. Each router has a
+template fragment that defines three shell functions: start, stop, and apply a
+changed replica list.
+
+A second loop on the host watches `replicas.txt` and calls the apply function
+after a change. vllm-router adds and removes workers through its API. ramjet
+and the Dynamo frontend restart. The loop also reads `run/router.pid` and
+restarts the router if its process exits.
+
+Only Dynamo's fragment defines `router_registrations`. The function adds worker
+registrations to the snapshot that the loop compares. If a worker registers
+again, the loop calls the apply function even if the replica list stays the same.
+See [Load balancing and routers](../guides/load-balancing.md).
 
 The same reconcile loop generates Prometheus targets from the replica head
 files. Prometheus can scrape a new replica without a manual configuration

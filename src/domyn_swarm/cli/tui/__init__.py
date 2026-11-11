@@ -18,6 +18,7 @@ def render_status(
     *,
     replica_summary: SwarmReplicaSummary | None = None,
     replica_rows: list | None = None,
+    router: str | None = None,
     console: Console | None = None,
 ) -> None:
     """
@@ -33,6 +34,7 @@ def render_status(
             st,
             replica_summary=replica_summary,
             replica_rows=replica_rows,
+            router=router,
             console=console,
         )
         return
@@ -46,6 +48,7 @@ def render_status(
             st,
             replica_summary=replica_summary,
             replica_rows=replica_rows,
+            router=router,
             console=console,
         )
     else:

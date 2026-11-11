@@ -18,7 +18,9 @@ from domyn_swarm.platform.protocols import ServingHandle
 TPL_DIR = Path("src/domyn_swarm/templates")
 
 
-def _cfg(tmp_path, *, colocate: bool, ray: bool = False) -> DomynLLMSwarmConfig:
+def _cfg(
+    tmp_path, *, colocate: bool, ray: bool = False, router: dict | None = None
+) -> DomynLLMSwarmConfig:
     return DomynLLMSwarmConfig.model_validate(
         {
             "name": "s",
@@ -33,7 +35,11 @@ def _cfg(tmp_path, *, colocate: bool, ray: bool = False) -> DomynLLMSwarmConfig:
                 "account": "a",
                 "partition": "p",
                 "qos": "q",
-                "endpoint": {"nginx_image": "/images/nginx.sif", "colocate": colocate},
+                "endpoint": {
+                    "nginx_image": "/images/nginx.sif",
+                    "colocate": colocate,
+                    "router": router or {"type": "nginx"},
+                },
             },
         }
     )
@@ -84,6 +90,29 @@ def test_staging_writes_lb_script_without_submitting_a_job(tmp_path):
     lb_script = (swarm_dir / "serving" / "lb.sh").read_text()
     assert "nginx" in lb_script
     assert (swarm_dir / "nginx.conf").exists()
+
+
+@pytest.mark.parametrize(
+    ("router", "launch"),
+    [
+        ({"type": "vllm-router", "image": "/images/router.sif"}, "exec"),
+        ({"type": "ramjet", "image": "/images/router.sif"}, "run"),
+        ({"type": "dynamo"}, "exec"),
+    ],
+)
+def test_colocated_load_balancer_starts_the_router_with_the_selected_runtime(
+    tmp_path, router, launch
+):
+    swarm_dir = tmp_path / "swarm"
+    cfg = _cfg(tmp_path, colocate=True, router=router)
+    SlurmDriver(cfg).stage_colocated_endpoint("s", cfg.replicas, str(swarm_dir))
+
+    script = (swarm_dir / "serving" / "lb.sh").read_text()
+    router_start = script.split("router_start() {", 1)[1].split("\n}", 1)[0]
+    assert f'"$DSWARM_CONTAINER_RUNTIME" {launch} --bind "$HOST_DIR"' in router_start
+    assert script.index("\nrouter_start\n") < script.index("instance start --writable-tmpfs")
+    assert script.count("--router-address 127.0.0.1:$ROUTER_PORT") == 2
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
 
 
 def test_staging_removes_the_endpoint_record_of_a_previous_deployment(tmp_path):
