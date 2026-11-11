@@ -1205,6 +1205,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "blake3" },
+    { name = "click" },
     { name = "deprecated" },
     { name = "fsspec" },
     { name = "huggingface-hub" },
@@ -1264,7 +1265,6 @@ docs = [
     { name = "pydata-sphinx-theme" },
     { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "sphinx-click" },
     { name = "sphinx-copybutton" },
     { name = "sphinx-design" },
 ]
@@ -1277,6 +1277,7 @@ linting = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.17.1" },
     { name = "blake3", specifier = ">=1.0.5" },
+    { name = "click", specifier = ">=8.0" },
     { name = "deprecated", specifier = ">=1.2.18" },
     { name = "fsspec", specifier = ">=2025.3.0" },
     { name = "huggingface-hub", specifier = ">=1.16.0" },
@@ -1298,7 +1299,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.0.0,<15" },
     { name = "sqlalchemy", specifier = ">=2.0.44" },
     { name = "tenacity", specifier = ">=9.0.0,<10" },
-    { name = "typer", specifier = "<0.29,>=0.16.0" },
+    { name = "typer", specifier = ">=0.16.0" },
 ]
 provides-extras = ["lepton", "polars", "ray", "all"]
 
@@ -1326,7 +1327,6 @@ docs = [
     { name = "myst-parser", specifier = ">=5.1" },
     { name = "pydata-sphinx-theme", specifier = ">=0.20" },
     { name = "sphinx", specifier = ">=8.2,<10" },
-    { name = "sphinx-click", specifier = ">=6.2" },
     { name = "sphinx-copybutton", specifier = ">=0.5" },
     { name = "sphinx-design", specifier = ">=0.7" },
 ]
@@ -6140,21 +6140,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sphinx-click"
-version = "6.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "docutils" },
-    { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9a/ed/a9767cd1b8b7fbdf260a89d5c8c86e20e3536b9878579e5ab7965a291e55/sphinx_click-6.2.0.tar.gz", hash = "sha256:fc78b4154a4e5159462e36de55b8643747da6cda86b3b52a8bb62289e603776c", size = 27035, upload-time = "2025-12-04T19:33:05.437Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/bd/cb244695f67f77b0a36200ce1670fc42a6fe2770847e870daab99cc2b177/sphinx_click-6.2.0-py3-none-any.whl", hash = "sha256:1fb1851cb4f2c286d43cbcd57f55db6ef5a8d208bfc3370f19adde232e5803d7", size = 8939, upload-time = "2025-12-04T19:33:04.037Z" },
-]
-
-[[package]]
 name = "sphinx-copybutton"
 version = "0.5.2"
 source = { registry = "https://pypi.org/simple" }
@@ -6817,17 +6802,18 @@ wheels = [
 
 [[package]]
 name = "typer"
-version = "0.25.1"
+version = "0.29.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
-    { name = "click" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "pydantic" },
     { name = "rich" },
     { name = "shellingham" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/51/9aed62104cea109b820bbd6c14245af756112017d309da813ef107d42e7e/typer-0.25.1.tar.gz", hash = "sha256:9616eb8853a09ffeabab1698952f33c6f29ffdbceb4eaeecf571880e8d7664cc", size = 122276, upload-time = "2026-04-30T19:32:16.964Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6c/aa/0de7986aa1fa856adb961c67345189b97d13f6e250b34ba68884df865f07/typer-0.29.1.tar.gz", hash = "sha256:ab6eb3880bf67ce96147734717f9ec333c06f66e361f3ea947d0be43da39f242", size = 205843, upload-time = "2026-11-11T09:18:39.782Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/f9/2b3ff4e56e5fa7debfaf9eb135d0da96f3e9a1d5b27222223c7296336e5f/typer-0.25.1-py3-none-any.whl", hash = "sha256:75caa44ed46a03fb2dab8808753ffacdbfea88495e74c85a28c5eefcf5f39c89", size = 58409, upload-time = "2026-04-30T19:32:18.271Z" },
+    { url = "https://files.pythonhosted.org/packages/05/ff/51969745f31cea6bcd12151e668febcf979656316e67a7755942267c1273/typer-0.29.1-py3-none-any.whl", hash = "sha256:00dbc549c13428bec1be55fe1f4d0fb8c6637a310e4f178ef14abe9534ee7b58", size = 121064, upload-time = "2026-11-11T09:18:38.671Z" },
 ]
 
 [[package]]

@@ -42,6 +42,7 @@ maintainers = [
 ]
 dependencies = [
     "blake3>=1.0.5",
+    "click>=8.0",
     "fsspec>=2025.3.0",
     "huggingface-hub>=1.16.0",
     "jinja2>=3.1.6",
@@ -54,7 +55,7 @@ dependencies = [
     "requests>=2.34.2",
     "rich>=14.0.0,<15",
     "tenacity>=9.0.0,<10",
-    "typer>=0.16.0,<0.29",
+    "typer>=0.16.0",
     "deprecated>=1.2.18",
     "python-ulid[pydantic]>=3.1.0",
     "sqlalchemy>=2.0.44",
@@ -84,7 +85,6 @@ docs = [
     "pydata-sphinx-theme>=0.20",
     "sphinx-design>=0.7",
     "sphinx-copybutton>=0.5",
-    "sphinx-click>=6.2",
 ]
 bench = [
     "datasets>=4.8.5",
