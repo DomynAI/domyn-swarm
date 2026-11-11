@@ -1,3 +1,28 @@
+## v0.36.0 (2026-11-11)
+
+### Feat
+
+- **slurm**: integrate router colocation with main
+- **slurm**: optionally run the load balancer inside the replica job
+- **config**: inherit monitoring activation from defaults
+- **slurm**: support apptainer container runtime
+- **cli**: show the load-balancer router in status
+- **jobs**: send a session ID per multi-turn conversation
+- **slurm**: restart a router whose process exited
+- **slurm**: serve replicas with Dynamo workers behind a Dynamo frontend
+- **slurm**: guard the router at nginx and scrape router metrics
+- **slurm**: add the ramjet router
+- **slurm**: run vllm-router behind the nginx front door
+- **runtime**: write a router-neutral replica list
+- **config**: add load-balancer router selection
+
+### Fix
+
+- **slurm**: integrate collector requeue handling
+- **slurm**: reject stale collector records after requeue
+- **swarm**: stop Slurm swarms whose endpoint never became ready
+- **slurm**: handle container runtime edge cases
+
 ## v0.35.0 (2026-11-02)
 
 ### BREAKING CHANGE
