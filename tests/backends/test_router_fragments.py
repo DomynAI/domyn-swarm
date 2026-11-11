@@ -228,37 +228,36 @@ def test_vllm_router_start_command():
     assert "--router-address 127.0.0.1:$ROUTER_PORT" in out
 
 
-def test_vllm_router_image_runs_through_singularity():
+def test_vllm_router_image_uses_the_selected_runtime():
     out = _render_lb({"type": "vllm-router", "image": "/img/vr.sif"})
-    assert 'singularity exec --bind "$HOST_DIR" /img/vr.sif vllm-router' in out
+    assert '"$DSWARM_CONTAINER_RUNTIME" exec --bind "$HOST_DIR" /img/vr.sif vllm-router' in out
 
 
 def test_router_starts_before_nginx_and_stops_on_exit():
     out = _render_lb({"type": "vllm-router", "binary": "vllm-router"})
-    assert out.index("router_start") < out.index("singularity instance start")
-    assert "router_stop" in out.split("trap", 1)[1]
+    assert out.index("\nrouter_start\n") < out.index("instance start --writable-tmpfs")
+    assert "trap lb_cleanup EXIT" in out
+    assert "trap 'exit 0' SIGTERM" in out
+    assert "router_stop" in _function_body(out, "lb_cleanup")
 
 
 def test_shutdown_stops_the_applier_before_the_router():
     out = _render_lb({"type": "ramjet", "binary": "ramjet"})
-    shutdown = out[out.rindex("trap '") :]
-    assert shutdown.index("kill ${APPLY_PID:-}") < shutdown.index("router_stop")
+    shutdown = _function_body(out, "lb_cleanup")
+    assert shutdown.index('wait "$APPLY_PID"') < shutdown.index("router_stop")
 
 
 def test_shutdown_stops_the_router_when_the_applier_already_exited(tmp_path):
     out = _render_lb({"type": "ramjet", "binary": "ramjet"})
-    shutdown = re.search(r"^trap '(echo \"\[lb\] shutting down\";.*)' EXIT SIGTERM$", out, re.M)
-    assert shutdown is not None
+    shutdown = _function_body(out, "lb_cleanup")
     stopped = tmp_path / "stopped"
     script = f"""
 set -eu
 router_stop() {{ touch {stopped}; }}
-singularity() {{ :; }}
 APPLY_PID=$(sh -c 'echo $$')
-COLLECTOR_PID=$APPLY_PID SUPERVISOR_PID=$APPLY_PID INSTANCE_NAME=lb
-{shutdown.group(1)}
+{shutdown}
 """
-    subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+    subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10, check=True)
     assert stopped.exists()
 
 
@@ -355,9 +354,9 @@ def test_vllm_router_apply_creates_a_missing_record(tmp_path):
     assert applied.read_text().splitlines() == ["n1:8000"]
 
 
-def test_ramjet_image_uses_singularity_run_and_rj_env():
+def test_ramjet_image_uses_the_selected_runtime_and_rj_env():
     out = _render_lb({"type": "ramjet", "image": "/img/ramjet.sif"})
-    assert 'singularity run --bind "$HOST_DIR" /img/ramjet.sif' in out
+    assert '"$DSWARM_CONTAINER_RUNTIME" run --bind "$HOST_DIR" /img/ramjet.sif' in out
     assert "RJ_API_ADDR=127.0.0.1:$ROUTER_PORT" in out
     assert "RJ_METRICS_ADDR=127.0.0.1:9201" in out
     assert "RJ_AFFINITY=prefix" in out
@@ -506,19 +505,25 @@ def test_bearer_pattern_matches_only_the_exact_key(tmp_path, key, accepted, reje
     assert not any(re.search(pattern, value) for value in rejected)
 
 
-def test_singularity_env_key_wins_over_vllm_api_key(tmp_path):
-    _run_auth_block(
-        tmp_path, "from-singularity", "SINGULARITYENV_VLLM_API_KEY", {"VLLM_API_KEY": "from-vllm"}
-    )
+@pytest.mark.parametrize(
+    ("preferred", "fallback"),
+    [
+        ("APPTAINERENV_VLLM_API_KEY", "SINGULARITYENV_VLLM_API_KEY"),
+        ("SINGULARITYENV_VLLM_API_KEY", "VLLM_API_KEY"),
+    ],
+)
+def test_router_api_key_matches_replica_precedence(tmp_path, preferred, fallback):
+    result = _run_auth_block(tmp_path, "preferred", preferred, {fallback: "fallback"})
+    assert result.returncode == 0, result.stderr
     text = (tmp_path / "serving" / "05-auth.conf").read_text()
-    assert "from-singularity" in text
-    assert "from-vllm" not in text
+    assert "preferred" in text
+    assert "fallback" not in text
 
 
 def _bind_list(script: str, command: str) -> list[str]:
-    """Return the `--bind` entries of the `singularity exec` that runs `command`."""
+    """Return the `--bind` entries of the container command that runs `command`."""
     head = script[: script.index(command)]
-    exec_line = head[head.rindex("singularity exec") :].split("\n", 1)[0]
+    exec_line = head[head.rindex('"$DSWARM_CONTAINER_RUNTIME" exec') :].split("\n", 1)[0]
     bind = re.search(r"--bind (\S+)", exec_line).group(1)
     return [entry.strip("\"'") for entry in bind.split(",")]
 
@@ -534,20 +539,19 @@ def test_dynamo_worker_command():
     assert "python3 -m dynamo.vllm --model" in out
     assert "--namespace job" in out
     assert "--discovery-backend file --request-plane tcp --event-plane zmq" in out
-    assert "SINGULARITYENV_PYTHONHASHSEED=0" in out
     assert "tcp://*:$(( 20080 + global_id ))" in out
     assert "vllm serve" not in out
 
 
 def test_dynamo_worker_serves_health_on_the_replica_port():
     out = _render_replicas({"type": "dynamo"})
-    assert "SINGULARITYENV_DYN_SYSTEM_PORT=$port" in out
-    assert 'SINGULARITYENV_DYN_FILE_KV="$SWARM_DIR/dynamo-kv"' in out
     assert 'mkdir -p "$SWARM_DIR/dynamo-kv"' in out
     assert 'echo "$endpoint" > "$head_file"' in out
 
 
-def _start_dynamo_replica(tmp_path: Path, getent_output: str) -> subprocess.CompletedProcess:
+def _start_dynamo_replica(
+    tmp_path: Path, getent_output: str, runtime: str = "apptainer"
+) -> subprocess.CompletedProcess:
     """Run `start_vllm_replica 3 8003 node7` against stub `srun` and `getent`."""
     out = _render_replicas({"type": "dynamo"})
     start = out.index("function start_vllm_replica() {")
@@ -569,6 +573,7 @@ def _start_dynamo_replica(tmp_path: Path, getent_output: str) -> subprocess.Comp
             f'PATH="{bin_dir}:$PATH"; LOG_DIR={tmp_path}/logs; SWARM_DIR={tmp_path}; '
             "GPUS_PER_NODE=4 GPUS_PER_REPLICA=4 MOUNTS=/m VLLM_IMAGE=/img.sif "
             "COLLECTOR_HOST=c COLLECTOR_PORT=1 DSWARM_AGENT_VERSION=0; "
+            f"DSWARM_CONTAINER_RUNTIME={runtime}; "
             f'{function}start_vllm_replica 3 8003 node7; wait "$!"',
         ],
         capture_output=True,
@@ -577,20 +582,23 @@ def _start_dynamo_replica(tmp_path: Path, getent_output: str) -> subprocess.Comp
     )
 
 
-def test_dynamo_worker_environment_and_kv_events_endpoint(tmp_path):
+@pytest.mark.parametrize("runtime", ["apptainer", "singularity"])
+def test_dynamo_worker_environment_and_kv_events_endpoint(tmp_path, runtime):
     result = _start_dynamo_replica(
-        tmp_path, "10.2.1.45       STREAM node7\\n10.2.1.45       DGRAM\\n"
+        tmp_path, "10.2.1.45       STREAM node7\\n10.2.1.45       DGRAM\\n", runtime
     )
     assert result.returncode == 0, result.stderr
     env = dict(
         line.split("=", 1) for line in (tmp_path / "env").read_text().splitlines() if "=" in line
     )
-    assert env["SINGULARITYENV_DYN_SYSTEM_PORT"] == "8003"
-    assert env["SINGULARITYENV_DYN_SYSTEM_USE_ENDPOINT_HEALTH_STATUS"] == '["generate"]'
-    assert env["SINGULARITYENV_DYN_TCP_RPC_HOST"] == "10.2.1.45"
-    assert env["SINGULARITYENV_DYN_FILE_KV"] == f"{tmp_path}/dynamo-kv"
+    assert env[f"{runtime.upper()}ENV_DYN_SYSTEM_PORT"] == "8003"
+    assert env[f"{runtime.upper()}ENV_DYN_SYSTEM_USE_ENDPOINT_HEALTH_STATUS"] == '["generate"]'
+    assert env[f"{runtime.upper()}ENV_DYN_TCP_RPC_HOST"] == "10.2.1.45"
+    assert env[f"{runtime.upper()}ENV_DYN_FILE_KV"] == f"{tmp_path}/dynamo-kv"
     assert (tmp_path / "dynamo-kv").is_dir()
     argv = (tmp_path / "argv").read_text().splitlines()
+    assert argv[argv.index("exec") - 1] == runtime
+    assert env[f"{runtime.upper()}ENV_PYTHONHASHSEED"] == "0"
     kv_events = json.loads(argv[argv.index("--kv-events-config") + 1])
     assert kv_events == {
         "enable_kv_cache_events": True,
@@ -666,17 +674,17 @@ def test_dynamo_frontend_without_policy_file_binds_only_the_swarm_directory():
 def test_dynamo_apply_restarts_the_frontend():
     out = _render_lb({"type": "dynamo"})
     body = _function_body(out, "router_apply_replicas")
-    assert body.index("router_stop") < body.index("( router_start )")
+    assert body.index("router_stop") < body.index("router_start")
 
 
 def _run_dynamo_frontend(tmp_path: Path, health_check: str, script: str):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    singularity = bin_dir / "singularity"
-    singularity.write_text(
+    apptainer = bin_dir / "apptainer"
+    apptainer.write_text(
         f'#!/bin/bash\nprintf "%s\\n" "$@" > {tmp_path}/argv\nenv > {tmp_path}/env\nexec sleep 30\n'
     )
-    singularity.chmod(0o755)
+    apptainer.chmod(0o755)
     curl = bin_dir / "curl"
     curl.write_text(f"#!/bin/bash\n{health_check}\n")
     curl.chmod(0o755)
@@ -694,7 +702,8 @@ def _run_dynamo_frontend(tmp_path: Path, health_check: str, script: str):
             "bash",
             "-euc",
             f'PATH="{bin_dir}:$PATH"; HOST_DIR={tmp_path}; WAIT_SEC=1; '
-            f"export DYN_SYSTEM_PORT=8300; source {fragment}; {script}",
+            "DSWARM_CONTAINER_RUNTIME=apptainer; export DYN_SYSTEM_PORT=8300; "
+            f"source {fragment}; {script}",
         ],
         capture_output=True,
         text=True,
@@ -843,12 +852,12 @@ def _run_applier(
     """Run `script` with the router fragment, `replica_snapshot` and `applier_pass` sourced.
 
     `router_body` runs as the router process, both for a `binary` router and,
-    through a stub `singularity`, for Dynamo. The stub `curl` reports the router
+    through a stub `apptainer`, for Dynamo. The stub `curl` reports the router
     healthy at once. `stubs` adds more commands to PATH, by name and body.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    commands = {"fake-router": router_body, "singularity": router_body, "curl": "exit 0"}
+    commands = {"fake-router": router_body, "apptainer": router_body, "curl": "exit 0"}
     for name, body in {**commands, **(stubs or {})}.items():
         (bin_dir / name).write_text(f"#!/bin/bash\n{body}\n")
         (bin_dir / name).chmod(0o755)
@@ -870,7 +879,8 @@ def _run_applier(
             "bash",
             "-euc",
             f'PATH="{bin_dir}:$PATH"; HOST_DIR={tmp_path}; SERVING_DIR={tmp_path}/serving; '
-            "WAIT_SEC=5; REPLICAS_FILE=$SERVING_DIR/replicas.txt; "
+            "DSWARM_CONTAINER_RUNTIME=apptainer; WAIT_SEC=5; "
+            "REPLICAS_FILE=$SERVING_DIR/replicas.txt; "
             f"APPLIED_FILE=$HOST_DIR/run/replicas.applied; source {lib}; {script}",
         ],
         capture_output=True,

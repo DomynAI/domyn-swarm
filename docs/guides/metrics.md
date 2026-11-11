@@ -40,6 +40,25 @@ monitoring:
 Both binaries default to being looked up on `PATH` by name, so if they are
 already installed cluster-wide, `mode: binary` alone is enough.
 
+## Enable monitoring by default
+
+Set `slurm.endpoint.monitoring.enabled` in `defaults.yaml` to enable monitoring
+for all Slurm swarms. Keep the image paths under `slurm.endpoint`:
+
+```yaml
+slurm:
+  endpoint:
+    monitoring:
+      enabled: true
+    prometheus_image: /path/to/prometheus.sif
+    nginx_exporter_image: /path/to/nginx-exporter.sif
+```
+
+An explicit `backend.endpoint.monitoring.enabled` value in the swarm YAML takes
+priority. Set it to `false` to disable monitoring for one swarm. Without either
+value, monitoring stays disabled. Other monitoring fields retain their existing
+defaults.
+
 ## What gets scraped
 
 | Job | Target | Source |

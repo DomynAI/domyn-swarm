@@ -172,8 +172,7 @@ class TestSwarmStateManager:
         assert isinstance(swarm, DomynLLMSwarm)
         # Serving handle should be wired back
         assert swarm.serving_handle is not None
-        # Compute backend should be attached
-        assert swarm._deployment.compute is not None  # type: ignore[attr-defined]
+        assert swarm._require_compute_backend() is not None  # type: ignore[attr-defined]
 
     @pytest.mark.skipif(
         importlib.util.find_spec("leptonai") is None, reason="leptonai does not support Python 3.14"
@@ -198,7 +197,7 @@ class TestSwarmStateManager:
         assert swarm.serving_handle is not None
         assert swarm.serving_handle.url == "https://lepton.example/v1"
         assert swarm.serving_handle.meta.get("workspace_id") == "ws-123"
-        assert swarm._deployment.compute is not None  # type: ignore[attr-defined]
+        assert swarm._require_compute_backend() is not None  # type: ignore[attr-defined]
 
     # --------------------------------------------------------------------- #
     # Error cases around missing job metadata
@@ -217,16 +216,18 @@ class TestSwarmStateManager:
         state_manager.swarm.serving_handle.meta["lb_jobid"] = None  # type: ignore[union-attr]
         state_manager.save(deployment_name="fake")
 
-        with pytest.raises(RuntimeError, match="lb_jobid"):
+        with pytest.raises(ValueError, match="job IDs"):
             SwarmStateManager.load(deployment_name="fake")
 
     def test_load_null_lb_node(self, state_manager: SwarmStateManager) -> None:
-        """Null LB node in serving_handle.meta should raise."""
+        """A swarm whose endpoint never became ready loads, but cannot run jobs."""
         state_manager.swarm.serving_handle.meta["lb_node"] = None  # type: ignore[union-attr]
         state_manager.save(deployment_name="fake")
 
+        swarm = SwarmStateManager.load(deployment_name="fake")
+
         with pytest.raises(RuntimeError, match="lb_node"):
-            SwarmStateManager.load(deployment_name="fake")
+            swarm._require_compute_backend()  # type: ignore[attr-defined]
 
     def test_load_unknown_job_raises(self, state_manager: SwarmStateManager) -> None:
         """Loading a non-existing deployment_name raises JobNotFoundError."""

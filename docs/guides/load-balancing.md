@@ -20,8 +20,9 @@ client --> nginx, 0.0.0.0:<endpoint port> --> router, 127.0.0.1:<router port> --
 ```
 
 Nginx serves the public `port`, `/health`, `/nginx_status`,
-Prometheus, the Ray dashboard, and `/gpu_ownership`. The router runs in the
-load-balancer job, on the same node as Nginx. It listens only on `127.0.0.1`.
+Prometheus, the Ray dashboard, and `/gpu_ownership`. The router runs on the same node as Nginx and
+listens only on `127.0.0.1`. If `backend.endpoint.colocate` is true, the first
+replica task starts both processes on its first node.
 Nginx forwards requests under `/v1/` to the router, which selects a replica.
 
 With a router enabled, Nginx returns 404 for paths outside `/v1/` and the
@@ -31,12 +32,12 @@ vllm-router's `/add_worker` and vLLM paths such as `/tokenize` and `/version`.
 With the default `type: nginx`, Nginx balances requests itself. Existing
 configurations keep this behavior.
 
-The load-balancer job starts the router after all replicas are ready and before
-Nginx. If a replica restarts on another node, the job updates the router's
-replica list.
+The load balancer starts the router after all replicas are ready and before
+Nginx. If a replica restarts on another node, the load balancer updates the
+router's replica list.
 
-The job checks the router process every 5 seconds. If the router exits, the
-job logs `[lb] WARNING: <router> exited; restarting` and starts it
+The load balancer checks the router process every 5 seconds. If the router
+exits, the load balancer logs `[lb] WARNING: <router> exited; restarting` and starts it
 again with the current replica list. Nginx returns 502 until the router is
 healthy. `domyn-swarm status` shows the router type next to the load
 balancer.
@@ -47,8 +48,8 @@ Nginx then forwards tokens as the router sends them.
 
 The router `port` defaults to 9200. vllm-router and ramjet serve metrics on
 `metrics_port`, which defaults to 9201. Dynamo serves metrics on `port`. These
-ports must be free on the load-balancer node and must differ from the endpoint
-`port`.
+ports must be free on the load-balancer node. With colocation, the replicas
+on that node also need their own ports.
 
 ### API key
 
@@ -57,13 +58,14 @@ With `type: nginx`, each vLLM replica checks the API key, and Nginx forwards the
 
 With any other router, Nginx checks the API key itself:
 
-- Domyn Swarm reads the key from `SINGULARITYENV_VLLM_API_KEY`, then
-  `VLLM_API_KEY`, then `API_TOKEN`, in the same order as for the replicas.
+- Domyn Swarm reads the key in the same order for Nginx and replicas. The
+  order is `APPTAINERENV_VLLM_API_KEY`, `SINGULARITYENV_VLLM_API_KEY`,
+  `VLLM_API_KEY`, then `API_TOKEN`.
 - If a key is set, Nginx returns 401 unless the request carries
   `Authorization: Bearer <key>`.
 - The match is exact and case-sensitive.
 - The key can contain only letters, digits, and the characters `._~+/=-`. If
-  it contains another character, the load-balancer job stops with an error.
+  it contains another character, the load balancer stops with an error.
 - `/health` stays open without a key.
 
 ## Choosing a router
@@ -189,7 +191,7 @@ backend:
 ```
 
 Omit `router` for the same result. To build the Nginx image, see [Running on
-Slurm](slurm.md#building-the-singularity-images).
+Slurm](slurm.md#building-the-container-images).
 
 With an API key, each vLLM replica checks the key. Nginx forwards the
 `Authorization` header unchanged.
@@ -341,7 +343,7 @@ Workers report their cached tokens through KV events. The NVIDIA Dynamo
 frontend uses these reports to select a worker. Session affinity keeps a
 conversation on one replica. Each replica runs a Dynamo worker,
 `python -m dynamo.vllm`, in place of `vllm serve`. The workers serve no OpenAI API. The frontend runs in the
-load-balancer job and serves the API behind Nginx.
+load-balancer node and serves the API behind Nginx.
 
 In the measurements, the Dynamo frontend added 30 to 160 ms to the time to first
 token. The other routers added 5 to 40 ms.
@@ -426,7 +428,7 @@ srun ... singularity exec --bind <mounts>,/shared/venvs/dynamo-1.6.0 --nv --writ
   `round_robin` policy omits `--kv-events-config`.
 - Workers register in a discovery store in the swarm directory.
 
-The load-balancer job runs the frontend. With `policy: thunderagent` and a
+The load balancer starts the frontend. With `policy: thunderagent` and a
 `venv`, Domyn Swarm runs this command:
 
 ```bash

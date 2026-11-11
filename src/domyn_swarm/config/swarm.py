@@ -291,6 +291,29 @@ class DomynLLMSwarmConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _reject_colocated_router_port_conflicts(self) -> "DomynLLMSwarmConfig":
+        from domyn_swarm.config.slurm import SlurmConfig
+
+        backend = self.backend
+        if not isinstance(backend, SlurmConfig) or not backend.endpoint.colocate:
+            return self
+        router = backend.endpoint.router
+        if router.type == "nginx":
+            return self
+
+        replica_count = 1 if backend.requires_ray else (self.replicas_per_node or 1)
+        replica_ports = range(self.port, self.port + replica_count)
+        router_ports = (
+            (router.port,) if router.type == "dynamo" else (router.port, router.metrics_port)
+        )
+        for port in router_ports:
+            if port in replica_ports:
+                raise ValueError(
+                    f"Router port {port} conflicts with a replica port on the first node"
+                )
+        return self
+
+    @model_validator(mode="after")
     def _reject_dynamo_with_ray(self) -> "DomynLLMSwarmConfig":
         from domyn_swarm.config.slurm import SlurmConfig
 

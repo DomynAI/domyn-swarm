@@ -189,3 +189,28 @@ def test_vllm_tool_call_args_stay_valid_without_dynamo():
     payload = _swarm_payload(gpus_per_replica=4, gpus_per_node=4, router={"type": "nginx"})
     payload["args"] = "--enable-auto-tool-choice --tool-call-parser hermes"
     assert DomynLLMSwarmConfig.model_validate(payload).args == payload["args"]
+
+
+@pytest.mark.parametrize(
+    ("router", "gpus_per_replica", "colocate", "conflicting_port"),
+    [
+        ({"type": "dynamo", "port": 8000}, 1, True, 8000),
+        ({"type": "ramjet", "binary": "r", "metrics_port": 8001}, 1, True, 8001),
+        ({"type": "vllm-router", "binary": "r", "port": 8000}, 8, True, 8000),
+        ({"type": "vllm-router", "binary": "r", "port": 8001}, 8, True, None),
+        ({"type": "dynamo", "port": 8002}, 1, True, None),
+        ({"type": "dynamo", "port": 8000}, 1, False, None),
+    ],
+)
+def test_router_ports_must_be_distinct_from_replica_ports_on_the_same_node(
+    router, gpus_per_replica, colocate, conflicting_port
+):
+    payload = _swarm_payload(gpus_per_replica=gpus_per_replica, gpus_per_node=4, router=router)
+    payload["port"] = 8000
+    payload["backend"]["endpoint"]["colocate"] = colocate
+
+    if conflicting_port is None:
+        DomynLLMSwarmConfig.model_validate(payload)
+    else:
+        with pytest.raises(ValidationError, match=f"Router port {conflicting_port} .* replica"):
+            DomynLLMSwarmConfig.model_validate(payload)

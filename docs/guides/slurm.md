@@ -15,24 +15,49 @@ domyn-swarm up -c config.yaml --replicas 3
 Three things happen:
 
 1. An array job starts one vLLM server per replica.
-2. A load-balancer job starts Nginx and the configured router. Nginx waits for
-   every replica before it exposes one endpoint.
+2. The load balancer waits for all replicas to become ready. It then starts
+   the configured router and Nginx to expose one endpoint.
 3. A SQLite state record lets later commands address the swarm by name.
 
-## Building the Singularity images
+## Running the load balancer with the replicas
 
-domyn-swarm uses Singularity as its container engine on Slurm. Build the two
-required images from the definition files in
+The load-balancer job holds a node of its own for Nginx, the health collector
+and batch jobs, none of which need a GPU. On clusters that allocate whole GPU
+nodes, `endpoint.colocate` runs them inside the replica job instead:
+
+```yaml
+backend:
+  type: slurm
+  endpoint:
+    colocate: true
+```
+
+The first array task starts Nginx and the configured router on its first node.
+The `up` command submits one job. Job steps from `job submit` run in
+that array task's allocation.
+
+The endpoint lives as long as that array task: if it fails, the endpoint goes
+with it, whereas a separate load-balancer job outlives its replicas. If the
+load balancer exits while the array task runs, the task cancels the whole
+replica job so that its nodes are released. `endpoint.qos`, `threads_per_core` and `wall_time` do not apply.
+
+## Building the container images
+
+domyn-swarm supports Apptainer and SingularityCE on Slurm. Jobs select
+`apptainer` when it is available on the execution node and otherwise fall back
+to `singularity`. Build the two required images from the definition files in
 [`examples/singularity_images/`](https://github.com/DomynAI/domyn-swarm/tree/main/examples/singularity_images),
 on a machine with `sudo`, or with `--fakeroot` if your site enables it:
 
 ```bash
 # NGINX load balancer image
-sudo singularity build nginx.sif examples/singularity_images/nginx.def
+sudo apptainer build nginx.sif examples/singularity_images/nginx.def
 
 # vLLM runtime image
-sudo singularity build vllm.sif examples/singularity_images/vllm.def
+sudo apptainer build vllm.sif examples/singularity_images/vllm.def
 ```
+
+The equivalent `singularity build` commands produce compatible images.
 
 Then add the image paths to the configuration:
 
@@ -48,7 +73,7 @@ backend:
 Practical notes:
 
 - Put the `.sif` files on a shared path readable by every compute node.
-- Singularity must be available on the execution nodes.
+- Apptainer or SingularityCE must be available on the execution nodes.
 - If your site disables `--fakeroot`, build with admin privileges elsewhere and
   copy the `.sif` onto the shared filesystem.
 - `image` is optional if you run vLLM from a virtual environment instead of a
@@ -79,7 +104,7 @@ Checked: `image`, `model`, `endpoint.nginx_image`, the monitoring sidecar
 images (container mode only), `mounts` sources and `venv_path`. For routers,
 validation also covers `endpoint.router.image`, a `binary` given as a path,
 `policy_config`, and `pyvenv.cfg` in a Dynamo `venv`. Images can be a
-`.sif` or a Singularity sandbox directory.
+`.sif` or an Apptainer or SingularityCE sandbox directory.
 
 The preflight validation skips values that the submit host cannot resolve. These
 values include registry references, Hugging Face repository IDs, bare names,
@@ -112,8 +137,8 @@ backend:
 Each entry is either `/path`, bound at the same path inside the container, or
 `/host/path:/container/path` with an optional `:ro` or `:rw` suffix.
 
-Entries pass unchanged to Singularity's `--bind`. domyn-swarm requires an
-absolute source path and permits at most a `source:dest:opts` triple. The
+Entries pass unchanged to the selected runtime's `--bind`. domyn-swarm requires
+an absolute source path and permits at most a `source:dest:opts` triple. The
 container runtime reports errors such as a missing path or invalid option. For
 the full bind syntax, see
 [Apptainer](https://apptainer.org/docs/user/main/bind_paths_and_mounts.html) or
@@ -155,7 +180,7 @@ backend:
   type: slurm
   modules:
     - cuda/12.1
-    - singularity
+    - apptainer  # or the site's SingularityCE module
   preamble:
     - "#SBATCH --exclusive"
     - "export NCCL_DEBUG=WARN"

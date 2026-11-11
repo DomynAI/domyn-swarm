@@ -198,7 +198,7 @@ def test_lb_starts_supervisor_and_mounts_main_conf():
     assert "RELOAD_PID=$!" in out
     assert "--pid-file" not in out
     # trap tears down both collector and supervisor
-    assert "kill $COLLECTOR_PID $SUPERVISOR_PID" in out
+    assert "kill ${COLLECTOR_PID:-} ${SUPERVISOR_PID:-}" in out
 
 
 def test_lb_still_starts_collector():

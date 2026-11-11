@@ -15,7 +15,7 @@ router_start() {
 {% for key, value in router.env.items() %}
         export {{ key }}={{ sh_quote(value) }}
 {% endfor %}
-        exec env -u DYN_SYSTEM_PORT singularity exec --bind "$HOST_DIR"{% for path in binds %},{{ sh_quote(path) }}{% endfor %} {{ sh_quote(cfg.image) }} \
+        exec env -u DYN_SYSTEM_PORT "$DSWARM_CONTAINER_RUNTIME" exec --bind "$HOST_DIR"{% for path in binds %},{{ sh_quote(path) }}{% endfor %} {{ sh_quote(cfg.image) }} \
             {{ sh_quote(router.venv ~ "/bin/python") if router.venv else "python3" }} -m dynamo.frontend --http-host 127.0.0.1 --http-port $ROUTER_PORT \
             --namespace {{ job_name }} \
             --discovery-backend file --request-plane tcp --event-plane zmq \

@@ -7,14 +7,15 @@
     exit 1
   fi
   mkdir -p "$SWARM_DIR/dynamo-kv"
-  SINGULARITYENV_DYN_SYSTEM_PORT=$port \
-  SINGULARITYENV_DYN_SYSTEM_USE_ENDPOINT_HEALTH_STATUS='["generate"]' \
-  SINGULARITYENV_DYN_TCP_RPC_HOST="$rpc_host" \
-  SINGULARITYENV_DYN_FILE_KV="$SWARM_DIR/dynamo-kv" \
-  SINGULARITYENV_PYTHONHASHSEED=0 \
-  srun --export=ALL -n1 -N1 -w $node --gres=gpu:{{ cfg.gpus_per_replica }} \
+  local runtime_env="${DSWARM_CONTAINER_RUNTIME^^}ENV"
+  env "${runtime_env}_DYN_SYSTEM_PORT=$port" \
+      "${runtime_env}_DYN_SYSTEM_USE_ENDPOINT_HEALTH_STATUS=[\"generate\"]" \
+      "${runtime_env}_DYN_TCP_RPC_HOST=$rpc_host" \
+      "${runtime_env}_DYN_FILE_KV=$SWARM_DIR/dynamo-kv" \
+      "${runtime_env}_PYTHONHASHSEED=0" \
+      srun --export=ALL -n1 -N1 -w $node --gres=gpu:{{ cfg.gpus_per_replica }} \
      --cpus-per-task={{ cfg.cpus_per_task }} \
-     singularity exec --bind $MOUNTS{% if router.venv %},{{ sh_quote(router.venv) }}{% endif %} --nv --writable-tmpfs "$VLLM_IMAGE" \
+     "$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS{% if router.venv %},{{ sh_quote(router.venv) }}{% endif %} --nv --writable-tmpfs "$VLLM_IMAGE" \
 {% include "serve/_watchdog.sh.j2" %}
      {{ sh_quote(router.venv ~ "/bin/python") if router.venv else "python3" }} -m dynamo.vllm --model {{ cfg.model }} \
 {% include "serve/_tensor_parallel.sh.j2" %}

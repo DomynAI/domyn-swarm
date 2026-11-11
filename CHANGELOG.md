@@ -1,3 +1,15 @@
+## v0.35.0 (2026-11-02)
+
+### BREAKING CHANGE
+
+- Python 3.10 is no longer supported.
+
+### Fix
+
+- **deps**: upgrade packages with open security advisories
+- update logo
+- **release**: bump install instructions with the package version
+
 ## v0.34.0 (2026-10-07)
 
 ### BREAKING CHANGE

@@ -4,7 +4,7 @@ Macros shared by the router fragments that lb.sh.j2 includes.
 Every fragment routers/<type>.sh.j2 defines these shell functions:
   router_start          - start the router in the background, set ROUTER_PID,
                           write it to ROUTER_PID_FILE, and return once
-                          http://127.0.0.1:$ROUTER_PORT/health answers, or exit
+                          http://127.0.0.1:$ROUTER_PORT/health answers, or return
                           1 after WAIT_SEC.
   router_stop           - stop the router whose PID ROUTER_PID_FILE holds.
                           Safe to call twice.
@@ -41,7 +41,7 @@ A fragment that runs a router process also sets these variables:
 {% if router.binary %}
 {{ sh_quote(router.binary) }}
 {%- else %}
-singularity {{ "run" if run else "exec" }} --bind "$HOST_DIR" {{ sh_quote(router.image) }}
+"$DSWARM_CONTAINER_RUNTIME" {{ "run" if run else "exec" }} --bind "$HOST_DIR" {{ sh_quote(router.image) }}
 {%- endif %}
 {%- endmacro %}
 
@@ -52,7 +52,7 @@ singularity {{ "run" if run else "exec" }} --bind "$HOST_DIR" {{ sh_quote(router
             echo "[lb] ERROR: {{ name }} did not become healthy on 127.0.0.1:$ROUTER_PORT" >&2
             tail -n 20 "$ROUTER_LOG" >&2 2>/dev/null || true
             router_stop
-            exit 1
+            return 1
         fi
         sleep 1
     done
@@ -88,10 +88,8 @@ router_stop() {
 
 {{ router_stop_from_pid_file() }}
 
-# The start runs in a subshell so that a failed health wait, which exits, makes
-# the apply fail and retry instead of ending the applier loop.
 router_apply_replicas() {
     router_stop
-    ( router_start )
+    router_start
 }
 {%- endmacro %}

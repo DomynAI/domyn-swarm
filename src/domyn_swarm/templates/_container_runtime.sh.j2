@@ -1,0 +1,13 @@
+if command -v apptainer >/dev/null 2>&1; then
+  DSWARM_CONTAINER_RUNTIME=apptainer
+  DSWARM_CONTAINER_RUNTIME_STATE_DIR="${APPTAINER_CONFIGDIR:-$HOME/.apptainer}"
+elif command -v singularity >/dev/null 2>&1; then
+  DSWARM_CONTAINER_RUNTIME=singularity
+  DSWARM_CONTAINER_RUNTIME_STATE_DIR="${SINGULARITY_CONFIGDIR:-$HOME/.singularity}"
+else
+  echo "ERROR: neither apptainer nor singularity is available on $(hostname)" >&2
+  exit 1
+fi
+
+export DSWARM_CONTAINER_RUNTIME
+export DSWARM_CONTAINER_RUNTIME_STATE_DIR

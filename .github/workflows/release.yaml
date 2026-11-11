@@ -36,7 +36,7 @@ jobs:
       - name: Read version from pyproject
         id: ver
         run: |
-          VERSION="$(python3.12 src/domyn_swarm/utils/version.py)"
+          VERSION="$(python3 src/domyn_swarm/utils/version.py)"
           test -n "$VERSION" || (echo "No [project].version in pyproject.toml" && exit 2)
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
 

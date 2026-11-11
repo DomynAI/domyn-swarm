@@ -105,10 +105,13 @@ class MonitoringConfig(BaseModel):
     """
 
     enabled: bool = Field(
-        default=False,
+        default_factory=default_for("slurm.endpoint.monitoring.enabled", False),
+        validate_default=True,
         description=(
             "Run Prometheus and an Nginx exporter alongside the load balancer. "
-            "Master switch: with it off, every other field here is ignored."
+            "Master switch: with it off, every other field here is ignored. "
+            "Defaults to `slurm.endpoint.monitoring.enabled` in defaults.yaml, "
+            "or false when that key is absent."
         ),
     )
     mode: Literal["container", "binary"] = Field(
@@ -310,6 +313,17 @@ class SlurmEndpointConfig(BaseModel):
             "all the memory of that allocation (`--mem=0`) and its `--cpus-per-task` "
             "value. The `--mem` and `--cpus-per-task` options of `job submit` "
             "override both."
+        ),
+    )
+    colocate: bool = Field(
+        default=False,
+        description=(
+            "Run the load balancer inside the replica job, on the first node of its "
+            "first array task, instead of in a job of its own. Saves the node the "
+            "separate job would hold, at the cost of the endpoint ending with that "
+            "array task. `qos`, `threads_per_core` and `wall_time` then do not "
+            "apply, and job steps run in that array task's allocation, still sized "
+            "by `cpus_per_task` and `mem`."
         ),
     )
     monitoring: MonitoringConfig = Field(
@@ -531,12 +545,13 @@ class SlurmConfig(BaseModel):
         def _validate_handle(handle: ServingHandle) -> None:
             """Reject a handle the Slurm serving backend could not query.
 
-            ``SlurmServingBackend.status()`` subscripts ``meta["jobid"]``
-            directly, so a handle without one -- a state record written before
-            the replica job existed, say -- would blow up with a bare KeyError
-            deep inside ``status()`` instead of here.
+            ``SlurmServingBackend.status()`` subscripts ``meta["jobid"]`` and
+            ``meta["lb_jobid"]`` directly, so a handle without them -- a state
+            record written before the jobs existed, say -- would blow up with a
+            bare KeyError deep inside ``status()`` instead of here. ``lb_node``
+            is not required: it appears only once the endpoint is ready.
             """
-            if handle.meta.get("jobid") is None:
+            if handle.meta.get("jobid") is None or handle.meta.get("lb_jobid") is None:
                 raise ValueError("State file does not contain valid job IDs")
 
         serving_spec = self.model_dump(exclude_none=True) | cfg_ctx.model_dump(

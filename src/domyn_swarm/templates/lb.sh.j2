@@ -18,6 +18,11 @@
 #SBATCH --error={{ swarm_directory }}/logs/endpoint/lb.err
 
 set -eu
+{% for mod in cfg.backend.modules %}
+module load {{ mod }}
+{% endfor %}
+{% include "_container_runtime.sh.j2" %}
+
 REPLICAS={{ replicas }}
 HOST_DIR="{{ swarm_directory }}"
 SERVING_DIR="$HOST_DIR/serving"
@@ -36,7 +41,7 @@ mkdir -p "$HOST_DIR" "$SERVING_DIR" "$HOST_DIR/run" "$HOST_DIR/logs"
 {% set router = cfg.backend.endpoint.router %}
 {% if router.type != "nginx" %}
 # begin api key check
-LB_API_KEY="${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}"
+LB_API_KEY="${APPTAINERENV_VLLM_API_KEY:-${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}}"
 if [[ -n "$LB_API_KEY" && ! "$LB_API_KEY" =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then
     echo "[lb] ERROR: the API key holds characters that the nginx check cannot match; use letters, digits and ._~+/=-" >&2
     exit 1
@@ -66,7 +71,7 @@ replica_snapshot() {
 
 
 collector_cmd() {
-  singularity exec --writable-tmpfs --bind "{{ collector_script_path }}:/opt/watchdog_collector.py,$HOST_DIR" "$PYTHON_IMG" \
+  "$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ collector_script_path }}:/opt/watchdog_collector.py,$HOST_DIR" "$PYTHON_IMG" \
     python3 /opt/watchdog_collector.py \
     --db "$HOST_DIR/watchdog.db" \
     --host "0.0.0.0" \
@@ -83,9 +88,23 @@ collector_cmd() {
     echo "COLLECTOR_PORT=$COLLECTOR_PORT"
 } > "$SERVING_DIR/collector.env"
 
-collector_start_or_die
+lb_cleanup() {
+  echo "[lb] shutting down"
+  if [[ -n "${APPLY_PID:-}" ]]; then
+    kill "$APPLY_PID" 2>/dev/null || true
+    wait "$APPLY_PID" 2>/dev/null || true
+  fi
+  router_stop
+  kill ${COLLECTOR_PID:-} ${SUPERVISOR_PID:-} ${RELOAD_PID:-} ${PROM_PID:-} ${NGINX_EXP_PID:-} 2>/dev/null || true
+  if [[ -n "${NGINX_STARTED:-}" ]]; then
+    "$DSWARM_CONTAINER_RUNTIME" instance stop "$INSTANCE_NAME" || true
+  fi
+}
 
-trap 'echo "[lb] shutting down collector"; router_stop; kill $COLLECTOR_PID' EXIT
+trap lb_cleanup EXIT
+trap 'exit 0' SIGTERM
+
+collector_start_or_die
 
 echo "[lb] waiting for $REPLICAS head files from job $DEP_JOBID"
 t0=$(date +%s)
@@ -105,7 +124,7 @@ done
 echo "[lb] all replicas ready"
 
 # Initial upstreams config (one-shot) before nginx starts.
-singularity exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_supervisor.py,$HOST_DIR" "$PYTHON_IMG" \
+"$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_supervisor.py,$HOST_DIR" "$PYTHON_IMG" \
   python3 /opt/lb_supervisor.py --once \
   --serving-dir "$SERVING_DIR" \
   --upstream-keepalive {{ cfg.backend.endpoint.nginx_upstream_keepalive }} \
@@ -119,7 +138,8 @@ router_start
 CACHE_DIR="$TMPDIR/cache"
 mkdir -p "$CACHE_DIR"
 
-singularity instance start --writable-tmpfs \
+NGINX_STARTED=1
+"$DSWARM_CONTAINER_RUNTIME" instance start --writable-tmpfs \
     -B "$HOST_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
     -B "$SERVING_DIR:/etc/nginx/conf.d:ro" \
     -B "$HOST_DIR/run":/run \
@@ -127,15 +147,15 @@ singularity instance start --writable-tmpfs \
     -B "$HOST_DIR/logs/endpoint:/var/log/nginx" \
     "$NGINX_IMG" "$INSTANCE_NAME"
 
-singularity exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -t' \
-  || { echo "[lb] ERROR: nginx config invalid" >&2; singularity instance stop "$INSTANCE_NAME" || true; exit 1; }
+"$DSWARM_CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -t' \
+  || { echo "[lb] ERROR: nginx config invalid" >&2; exit 1; }
 echo "[lb] started nginx instance '$INSTANCE_NAME'"
 
 {% if cfg.backend.endpoint.monitoring.enabled %}
 MON_PROM_DIR="$TMPDIR/prometheus"
 mkdir -p "$MON_PROM_DIR"
 {% if cfg.backend.endpoint.monitoring.mode == "container" %}
-singularity exec --writable-tmpfs \
+"$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs \
   -B "$SERVING_DIR:/etc/prometheus/serving:ro" \
   -B "$MON_PROM_DIR:/prometheus" \
   "{{ cfg.backend.endpoint.monitoring.prometheus_image }}" \
@@ -146,7 +166,7 @@ singularity exec --writable-tmpfs \
     --web.listen-address=127.0.0.1:{{ cfg.backend.endpoint.monitoring.port }} \
   >>"$HOST_DIR/logs/prometheus.log" 2>&1 &
 PROM_PID=$!
-singularity exec --writable-tmpfs "{{ cfg.backend.endpoint.monitoring.nginx_exporter_image }}" \
+"$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs "{{ cfg.backend.endpoint.monitoring.nginx_exporter_image }}" \
   nginx-prometheus-exporter \
     --nginx.scrape-uri=http://127.0.0.1:{{ cfg.backend.endpoint.port }}/nginx_status \
     --web.listen-address=127.0.0.1:{{ cfg.backend.endpoint.monitoring.exporter_port }} \
@@ -171,7 +191,7 @@ echo "[lb] started monitoring sidecars (prometheus=$PROM_PID, nginx_exporter=$NG
 {% endif %}
 
 # Steady-state supervisor: keeps upstreams config in sync (generation only).
-singularity exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_supervisor.py,$HOST_DIR" "$PYTHON_IMG" \
+"$DSWARM_CONTAINER_RUNTIME" exec --writable-tmpfs --bind "{{ supervisor_script_path }}:/opt/lb_supervisor.py,$HOST_DIR" "$PYTHON_IMG" \
   python3 /opt/lb_supervisor.py \
   --serving-dir "$SERVING_DIR" \
   --upstream-keepalive {{ cfg.backend.endpoint.nginx_upstream_keepalive }} \
@@ -188,8 +208,8 @@ UPSTREAMS_FILE="$SERVING_DIR/00-upstreams.conf"
   while true; do
     cur="$(md5sum "$UPSTREAMS_FILE" 2>/dev/null | awk '{print $1}')"
     if [ -n "$cur" ] && [ "$cur" != "$last" ]; then
-      if singularity exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -t' >/dev/null 2>&1; then
-        singularity exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -s reload' \
+      if "$DSWARM_CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -t' >/dev/null 2>&1; then
+        "$DSWARM_CONTAINER_RUNTIME" exec instance://"$INSTANCE_NAME" bash -lc 'PATH=/usr/sbin:$PATH; nginx -s reload' \
           && echo "[lb] reloaded nginx (upstreams changed)" \
           && last="$cur"
       else
@@ -215,7 +235,7 @@ applier_pass() {
         router_stop
         # A snapshot taken before the start can only be older than what the
         # router reads, so a change in between leads to one more apply.
-        if replica_snapshot >"$APPLIED_FILE.next" && ( router_start ); then
+        if replica_snapshot >"$APPLIED_FILE.next" && router_start; then
             mv "$APPLIED_FILE.next" "$APPLIED_FILE"
         fi
         return 0
@@ -242,7 +262,5 @@ applier_pass() {
 ) &
 APPLY_PID=$!
 echo "[lb] started router replica applier PID $APPLY_PID"
-
-trap 'echo "[lb] shutting down"; kill ${APPLY_PID:-} 2>/dev/null || true; router_stop; kill $COLLECTOR_PID $SUPERVISOR_PID ${RELOAD_PID:-} ${PROM_PID:-} ${NGINX_EXP_PID:-} 2>/dev/null; singularity instance stop "$INSTANCE_NAME" || true; exit 0' EXIT SIGTERM
 
 wait $SUPERVISOR_PID

@@ -54,6 +54,9 @@ function wait_for_vllm_ready() {
     fi
 
     echo "[head] $endpoint not ready (code=$code), retrying..."
+{% if cfg.backend.endpoint.colocate %}
+    check_colocated_lb
+{% endif %}
     sleep 5
   done
 }
@@ -96,15 +99,17 @@ done
 {% if _mon.enabled and _mon.gpu_exporter.enabled %}
 # --- GPU exporter (one per node, in the job's GPU cgroup) ---
 launch_gpu_exporter() {
+{% include "_container_runtime.sh.j2" %}
+
   echo "$(hostname):{{ _mon.gpu_exporter.port }}" > "{{ swarm_directory }}/serving/gpu-$(hostname).target"
 {% if _mon.gpu_exporter.kind == "dcgm" %}
-  singularity exec --nv \
+  "$DSWARM_CONTAINER_RUNTIME" exec --nv \
     --bind "{{ dcgm_core_counters_path }}:/etc/dcgm-exporter/core.csv" \
     "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
     dcgm-exporter -a ":{{ _mon.gpu_exporter.port }}" -f /etc/dcgm-exporter/core.csv \
     >> "$LOG_DIR/gpu_exporter.log" 2>&1 &
 {% elif _mon.mode == "container" %}
-  singularity exec --nv "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
+  "$DSWARM_CONTAINER_RUNTIME" exec --nv "{{ _mon.gpu_exporter.resolved_image(mode=_mon.mode) }}" \
     {{ _mon.gpu_exporter.resolved_binary(mode=_mon.mode) }} --web.listen-address=":{{ _mon.gpu_exporter.port }}" \
     >> "$LOG_DIR/gpu_exporter.log" 2>&1 &
 {% else %}
@@ -145,5 +150,8 @@ trap 'echo "[batch] caught SIGTERM → shutting down"; exit 0' SIGTERM
 
 # Keep job alive
 while true; do
+{% if cfg.backend.endpoint.colocate %}
+  check_colocated_lb
+{% endif %}
   sleep 60
 done

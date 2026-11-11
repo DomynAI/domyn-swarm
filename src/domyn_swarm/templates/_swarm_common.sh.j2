@@ -38,15 +38,18 @@ module purge
 module load {{ mod }}
 {% endfor %}
 
+{% include "_container_runtime.sh.j2" %}
+
 ###############################################################################
 #  ENVIRONMENT VARIABLES
 ###############################################################################
 export VLLM_IMAGE="{{ cfg.image }}"
 export HF_HOME="{{ cfg.env.HF_HOME }}"
 
-# User-defined environment variables (to be passed to Singularity)
+# User-defined environment variables (to be passed to the container runtime)
 {% for k, v in (cfg.env | default({}, true)).items() -%}
 {% set KEY = k|replace('-', '_') %}
+export APPTAINERENV_{{ KEY }}="{{ v | string | replace('\\','\\\\') | replace('"','\\"') }}"
 export SINGULARITYENV_{{ KEY }}="{{ v | string | replace('\\','\\\\') | replace('"','\\"') }}"
 export {{ KEY }}="{{ v | string | replace('\\','\\\\') | replace('"','\\"') }}"
 {% endfor -%}
@@ -75,7 +78,7 @@ export DSWARM_AGENT_VERSION={{ dswarm_agent_version }}
 export SWARM_DIR="{{ swarm_directory }}"
 export LOG_DIR={{ swarm_directory }}/logs/replicas/replica-${REPL_ID}
 export VLLM_HOST_IP=$(hostname -I | awk '{print $1}')
-export VLLM_API_KEY="${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}"
+export VLLM_API_KEY="${APPTAINERENV_VLLM_API_KEY:-${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}}"
 mkdir -p "$LOG_DIR"
 
 ###############################################################################
@@ -124,9 +127,16 @@ MOUNTS=$MOUNTS,{{ mount }}
 MOUNTS=$MOUNTS,$LOCAL_RAY_LOGS:/tmp/ray
 {% endif %}
 
+{% if cfg.backend.endpoint.colocate %}
+{% include "_colocated_lb.sh.j2" %}
+
+{% endif %}
 #Wait for creation of file "SWARM_DIR/serving/collector.env" containing COLLECTOR_HOST and COLLECTOR_PORT
 echo "[replica $REPL_ID] waiting for collector.env file..."
 while [ ! -f "{{ swarm_directory }}/serving/collector.env" ]; do
+{% if cfg.backend.endpoint.colocate %}
+    check_colocated_lb
+{% endif %}
     sleep 2
 done
 
