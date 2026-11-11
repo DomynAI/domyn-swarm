@@ -100,13 +100,27 @@ MOUNTS=$MOUNTS,m
 
 MOUNTS=$MOUNTS,$LOCAL_RAY_LOGS:/tmp/ray
 
-#Wait for creation of file "SWARM_DIR/serving/collector.env" containing COLLECTOR_HOST and COLLECTOR_PORT
+COLLECTOR_ENV_FILE="/swarm/serving/collector.env"
+collector_publish_env() {
+  {
+    printf 'COLLECTOR_HOST=%q\n' "$COLLECTOR_HOST"
+    printf 'COLLECTOR_PORT=%q\n' "$COLLECTOR_PORT"
+  } > "$COLLECTOR_ENV_FILE.tmp"
+  mv "$COLLECTOR_ENV_FILE.tmp" "$COLLECTOR_ENV_FILE"
+}
+
+collector_load_env() {
+  local record
+  record="$(cat "$COLLECTOR_ENV_FILE" 2>/dev/null)" || return 1
+  COLLECTOR_HOST="" COLLECTOR_PORT=""
+  source /dev/stdin <<< "$record" || return 1
+  [[ -n "$COLLECTOR_HOST" && -n "$COLLECTOR_PORT" ]] || return 1
+}
 echo "[replica $REPL_ID] waiting for collector.env file..."
-while [ ! -f "/swarm/serving/collector.env" ]; do
+until collector_load_env; do
     sleep 2
 done
 
-source "/swarm/serving/collector.env"
 echo "[replica $REPL_ID] loaded collector config: COLLECTOR_HOST=$COLLECTOR_HOST COLLECTOR_PORT=$COLLECTOR_PORT"
 
 ###############################################################################
