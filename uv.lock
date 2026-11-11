@@ -1298,7 +1298,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.0.0,<15" },
     { name = "sqlalchemy", specifier = ">=2.0.44" },
     { name = "tenacity", specifier = ">=9.0.0,<10" },
-    { name = "typer", specifier = ">=0.16.0" },
+    { name = "typer", specifier = "<0.29,>=0.16.0" },
 ]
 provides-extras = ["lepton", "polars", "ray", "all"]
 

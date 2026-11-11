@@ -18,6 +18,7 @@
 
 ### Fix
 
+- **deps**: cap Typer below 0.29 so the CLI loads after a fresh install
 - **slurm**: integrate collector requeue handling
 - **slurm**: reject stale collector records after requeue
 - **swarm**: stop Slurm swarms whose endpoint never became ready
