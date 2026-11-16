@@ -1,4 +1,5 @@
 {% include "_swarm_common.sh.j2" %}
+{% set numa_prefix = 'numactl --membind="$DSWARM_NUMA_NODES" ' if cfg.backend.numa_membind else '' %}
 
 ###############################################################################
 #  MULTI-NODE DEPLOYMENT (RAY)
@@ -66,7 +67,7 @@ function start_ray_head() {
   echo "[head] starting container instance ($HEAD_NODE)..."
   echo "VLLM_HOST_IP=$VLLM_HOST_IP" > $REPLICA_ENV
 
-  "$DSWARM_CONTAINER_RUNTIME" instance start --bind $MOUNTS --contain --writable-tmpfs \
+  {{ numa_prefix }}"$DSWARM_CONTAINER_RUNTIME" instance start --bind $MOUNTS --contain --writable-tmpfs \
                 --env-file $REPLICA_ENV \
                 --nv "$VLLM_IMAGE" "$INSTANCE_TAG" \
                 --disable-usage-stats --head --block \
@@ -134,7 +135,7 @@ function start_ray_workers() {
 
        inst="{{ job_name }}-worker"
 
-       "$DSWARM_CONTAINER_RUNTIME" instance start --bind '"$MOUNTS"' --contain --writable-tmpfs --nv '"$VLLM_IMAGE"' \
+       {{ numa_prefix }}"$DSWARM_CONTAINER_RUNTIME" instance start --bind '"$MOUNTS"' --contain --writable-tmpfs --nv '"$VLLM_IMAGE"' \
        $inst \
           --disable-usage-stats \
           --address='"$HEAD_NODE"':'"$HEAD_PORT"' \
@@ -165,7 +166,7 @@ function start_ray_workers() {
 
 function start_vllm_server() {
   echo "[head] starting vLLM REST server ..."
-  "$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS --nv --contain --writable-tmpfs --env VLLM_USE_PRECOMPILED=1 \
+  {{ numa_prefix }}"$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS --nv --contain --writable-tmpfs --env VLLM_USE_PRECOMPILED=1 \
            instance://"$INSTANCE_TAG" \
 {% if cfg.watchdog is not defined or cfg.watchdog.enabled %}
            python3 /opt/watchdog.py \

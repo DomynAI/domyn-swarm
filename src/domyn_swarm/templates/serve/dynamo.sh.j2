@@ -15,7 +15,7 @@
       "${runtime_env}_PYTHONHASHSEED=0" \
       srun --export=ALL -n1 -N1 -w $node --gres=gpu:{{ cfg.gpus_per_replica }} \
      --cpus-per-task={{ cfg.cpus_per_task }} \
-     "$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS{% if router.venv %},{{ sh_quote(router.venv) }}{% endif %} --nv --writable-tmpfs "$VLLM_IMAGE" \
+     {{ numa_prefix }}"$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS{% if router.venv %},{{ sh_quote(router.venv) }}{% endif %} --nv --writable-tmpfs "$VLLM_IMAGE" \
 {% include "serve/_watchdog.sh.j2" %}
      {{ sh_quote(router.venv ~ "/bin/python") if router.venv else "python3" }} -m dynamo.vllm --model {{ cfg.model }} \
 {% include "serve/_tensor_parallel.sh.j2" %}

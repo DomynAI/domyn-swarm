@@ -171,6 +171,25 @@ path exists. Otherwise, the job log contains a warning. This behavior permits a
 configuration to move between clusters. `/dev/infiniband` uses the same rule
 without explicit configuration.
 
+## NUMA memory binding
+
+On Grace Hopper nodes, GPU memory appears as NUMA nodes without CPUs. The
+kernel can place host allocations there, so vLLM's activations no longer fit in
+GPU memory. `backend.numa_membind` runs every vLLM and Ray process under
+`numactl --membind`:
+
+```yaml
+backend:
+  type: slurm
+  numa_membind: cpu   # or an explicit node list, such as "0-3"
+```
+
+`cpu` binds to the NUMA nodes that have CPUs, read from
+`/sys/devices/system/node` on each node at launch time. An explicit list passes
+unchanged to `numactl`. When the field is unset, the kernel chooses. `numactl`
+runs on the host, outside the container, so the compute nodes must have it. The
+job fails at startup when `numactl` is missing.
+
 ## Modules and sbatch preamble
 
 Two fields inject site-specific setup into the generated cluster script:

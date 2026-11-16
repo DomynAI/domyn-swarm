@@ -1,4 +1,5 @@
 {% include "_swarm_common.sh.j2" %}
+{% set numa_prefix = 'numactl --membind="$DSWARM_NUMA_NODES" ' if cfg.backend.numa_membind else '' %}
 
 echo "[single-node] Running colocated replicas..."
 
