@@ -80,6 +80,32 @@ export LOG_DIR={{ swarm_directory }}/logs/replicas/replica-${REPL_ID}
 export VLLM_HOST_IP=$(hostname -I | awk '{print $1}')
 export VLLM_API_KEY="${APPTAINERENV_VLLM_API_KEY:-${SINGULARITYENV_VLLM_API_KEY:-${VLLM_API_KEY:-${API_TOKEN:-}}}}"
 mkdir -p "$LOG_DIR"
+{% if cfg.backend.numa_membind %}
+
+# numactl runs on the host, outside the container, and the memory policy is inherited
+# by everything it starts.
+if ! command -v numactl >/dev/null 2>&1; then
+  echo "ERROR: backend.numa_membind is set, but numactl is not available on $(hostname)" >&2
+  exit 1
+fi
+{% if cfg.backend.numa_membind == "cpu" %}
+# GPU memory shows up as NUMA nodes without CPUs; bind host memory to the others.
+DSWARM_NUMA_NODES=""
+for node_dir in /sys/devices/system/node/node[0-9]*; do
+  if [[ -n "$(<"$node_dir/cpulist")" ]]; then
+    DSWARM_NUMA_NODES+="${DSWARM_NUMA_NODES:+,}${node_dir##*node}"
+  fi
+done
+if [[ -z "$DSWARM_NUMA_NODES" ]]; then
+  echo "ERROR: backend.numa_membind=cpu, but no NUMA node with CPUs was found on $(hostname)" >&2
+  exit 1
+fi
+{% else %}
+DSWARM_NUMA_NODES="{{ cfg.backend.numa_membind }}"
+{% endif %}
+export DSWARM_NUMA_NODES
+echo "NUMA memory binding: nodes $DSWARM_NUMA_NODES"
+{% endif %}
 
 ###############################################################################
 #  NODE AND PORT CONFIGURATION

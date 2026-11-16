@@ -1,4 +1,5 @@
 {% include "_swarm_common.sh.j2" %}
+{% set numa_prefix = 'numactl --membind="$DSWARM_NUMA_NODES" ' if cfg.backend.numa_membind else '' %}
 
 echo "[single-node] Running colocated replicas..."
 
@@ -30,7 +31,7 @@ function start_vllm_replica() {
 {% endif %}
   srun --export=ALL -n1 -N1 -w $node --gres=gpu:{{ cfg.gpus_per_replica }} \
      --cpus-per-task={{ cfg.cpus_per_task }} \
-     "$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS --nv --writable-tmpfs "$VLLM_IMAGE" \
+     {{ numa_prefix }}"$DSWARM_CONTAINER_RUNTIME" exec --bind $MOUNTS --nv --writable-tmpfs "$VLLM_IMAGE" \
 {% if cfg.watchdog is not defined or cfg.watchdog.enabled %}
      python3 /opt/watchdog.py \
       {{ args_to_str(build_watchdog_args(

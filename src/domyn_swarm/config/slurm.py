@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025-2026 Domyn
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -478,6 +479,27 @@ class SlurmConfig(BaseModel):
             "than in a per-deployment config."
         ),
     )
+
+    numa_membind: str | None = Field(
+        default=None,
+        description=(
+            "NUMA nodes that hold the host memory of the vLLM and Ray processes, "
+            "applied with `numactl --membind`. `cpu` selects, on each node at "
+            "launch time, the NUMA nodes that have CPUs; on Grace Hopper this keeps "
+            "host allocations out of GPU memory, which appears as NUMA nodes "
+            "without CPUs. An explicit list such as `0-3` or `0,2` is passed "
+            "unchanged. Unset leaves the placement to the kernel. Requires "
+            "`numactl` on the compute nodes."
+        ),
+    )
+
+    @field_validator("numa_membind")
+    @classmethod
+    def _validate_numa_membind(cls, value: str | None) -> str | None:
+        """Accept `cpu` or a numactl node list; the value is rendered into a shell script."""
+        if value is None or value == "cpu" or re.fullmatch(r"\d+(-\d+)?(,\d+(-\d+)?)*", value):
+            return value
+        raise ValueError(f"numa_membind must be 'cpu' or a node list such as '0-3', got {value!r}")
 
     @field_validator("mounts", "system_mounts")
     @classmethod
