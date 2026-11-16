@@ -1,0 +1,15 @@
+{% if cfg.watchdog is not defined or cfg.watchdog.enabled %}
+     python3 /opt/watchdog.py \
+      {{ args_to_str(build_watchdog_args(
+        cfg.watchdog,
+        swarm_id=job_name,
+        replica_id="$global_id",
+        node="$node",
+        port="$port",
+        log_dir="$log_dir",
+        collector_address="$COLLECTOR_HOST:$COLLECTOR_PORT",
+        agent_version="$DSWARM_AGENT_VERSION",
+        ray_enabled=False
+      )) }} \
+      -- \
+{% endif %}

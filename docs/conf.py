@@ -13,13 +13,6 @@ import sys
 DOCS_DIR = Path(__file__).parent
 sys.path.insert(0, str(DOCS_DIR / "_ext"))
 
-# Build the Click group now, before autodoc runs. autodoc's own imports leave the
-# interpreter in a state where importing domyn_swarm.cli.job_helpers raises a
-# Pydantic schema-generation error, which would make sphinx-click fail to import
-# the group and silently empty the CLI reference. Importing here caches the built
-# group in sys.modules, so sphinx-click picks it up already constructed.
-import cli_app  # noqa: E402, F401
-
 project = "domyn-swarm"
 author = "Domyn"
 copyright = "2025-2026, Domyn"
@@ -43,7 +36,7 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx_copybutton",
     "sphinx_design",
-    "sphinx_click",
+    "cli_app",
     "gen_config_reference",
 ]
 

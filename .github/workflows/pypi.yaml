@@ -16,6 +16,9 @@ name: PyPI
 # approval rule for a release. The publish action also signs a PEP 740
 # attestation for each file, so the index shows which workflow run built it.
 on:
+  pull_request:
+  schedule:
+    - cron: "17 6 * * *"
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -31,6 +34,7 @@ permissions:
 
 jobs:
   build:
+    name: Release wheel smoke test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,9 +63,17 @@ jobs:
         run: uv build --no-sources
 
       - name: Smoke-test the wheel outside the project
-        run: uv run --isolated --no-project --python 3.12 --with dist/*.whl domyn-swarm --help
+        run: |
+          smoke_env="$RUNNER_TEMP/wheel-smoke"
+          cd "$RUNNER_TEMP"
+          uv venv --python 3.12 "$smoke_env"
+          uv pip install --python "$smoke_env/bin/python" "$GITHUB_WORKSPACE"/dist/*.whl
+          uv pip show --python "$smoke_env/bin/python" typer
+          "$smoke_env/bin/domyn-swarm" --help
+          "$smoke_env/bin/domyn-swarm" job submit --help
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         with:
           name: dist
           path: dist/

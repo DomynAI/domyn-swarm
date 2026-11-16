@@ -11,6 +11,7 @@ from pydantic import model_validator
 from domyn_swarm.helpers.data import compute_perplexity_metrics, extract_token_logprobs
 from domyn_swarm.jobs.api.base import SwarmJob
 from domyn_swarm.jobs.api.config import JobConfig
+from domyn_swarm.jobs.api.session import new_session_id, session_request_options
 
 
 def _extract_reasoning_content(message: Any) -> Any | None:
@@ -287,17 +288,21 @@ class MultiTurnChatCompletionJob(SwarmJob):
 
         running_request: list[ChatCompletionMessageParam] = []
         reasoning_by_index: list[Any | None] = []
+        session_id = new_session_id()
 
         # Zip together slice starts and ends
         idx = 0
 
         for i in user_idxs:
+            session_options = session_request_options(
+                session_id, extra_body, final=i == user_idxs[-1]
+            )
             # append all the messages until the next user message (including system, etc.)
             running_request.extend(messages[idx : i + 1])
             reasoning_by_index.extend([None] * len(messages[idx : i + 1]))
 
             resp: ChatCompletion = await self.client.chat.completions.create(
-                model=self.model, messages=running_request, extra_body=extra_body
+                model=self.model, messages=running_request, **session_options
             )
             choice = resp.choices[0]
 

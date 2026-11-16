@@ -60,7 +60,7 @@ backends can use its `probe` unchanged.
 ## How the two platforms satisfy them
 
 Slurm uses an array job of vLLM replicas and an Nginx load-balancer job. An HTTP
-probe calls `/v1/health` through the load balancer. Compute uses `srun` in the
+probe calls `/health` through the load balancer. Compute uses `srun` in the
 allocation. `require_allocated_node` prevents work on the load-balancer node.
 With that setting, a job step gets all the memory and the CPU count of the
 allocation that submits it.

@@ -9,8 +9,9 @@ Keeps nginx's dynamic upstreams (and, when monitoring is enabled, the Prometheus
 writes into the serving directory. Runs inside the same Python image as the
 collector and is launched by the LB sbatch job (see ``templates/lb.sh.j2``).
 
-Generation-only: the supervisor writes ``00-upstreams.conf`` and, when
-``--emit-targets`` is set, ``targets.json``. It does **not** reload nginx.
+Generation-only: the supervisor writes ``00-upstreams.conf``, the router-neutral
+``replicas.txt`` (one ``host:port`` per line) and, when ``--emit-targets`` is
+set, ``targets.json``. It does **not** reload nginx.
 nginx reload is performed host-side by ``lb.sh.j2`` via ``inotifywait`` (or
 equivalent polling). Cross-container ``SIGHUP`` is not possible on this platform
 because ``singularity instance start`` uses a private PID namespace, so a process
@@ -77,6 +78,7 @@ def render_upstreams(
     ray_dashboard_port: int,
     ray_port: int,
     upstream_keepalive: int = 0,
+    router_address: str | None = None,
 ) -> str:
     """Render the nginx ``upstream`` blocks for the current replicas.
 
@@ -92,14 +94,20 @@ def render_upstreams(
         upstream_keepalive: Idle connections each nginx worker caches for the
             ``llm`` upstream. 0 disables connection reuse, so every proxied
             request opens a fresh connection to a replica.
+        router_address: ``host:port`` of a local router. When set, the ``llm``
+            upstream holds only this server and the router balances across
+            replicas; Ray upstreams still target the replica head.
 
     Returns:
         nginx configuration text defining the ``llm`` upstream (and Ray
         upstreams when enabled).
     """
     addrs = read_head_files(serving_dir)
-    lines = ["upstream llm {", "  zone llm 1m;", "  least_conn;"]
-    lines.extend(f"  server {addr} max_fails=2 fail_timeout=10s;" for addr in addrs)
+    if router_address:
+        lines = ["upstream llm {", "  zone llm 1m;", f"  server {router_address};"]
+    else:
+        lines = ["upstream llm {", "  zone llm 1m;", "  least_conn;"]
+        lines.extend(f"  server {addr} max_fails=2 fail_timeout=10s;" for addr in addrs)
     if upstream_keepalive > 0:
         lines.append(f"  keepalive {upstream_keepalive};")
     lines.append("}")
@@ -143,9 +151,23 @@ def write_if_changed(target: Path, content: str) -> bool:
 
 
 UPSTREAMS_FILENAME = "00-upstreams.conf"
+REPLICAS_FILENAME = "replicas.txt"
 TARGETS_FILENAME = "targets.json"
 GPU_TARGETS_FILENAME = "gpu_targets.json"
 RAY_TARGETS_FILENAME = "ray_targets.json"
+
+
+def render_replicas(serving_dir: Path) -> str:
+    """Render the router-neutral replica list.
+
+    Args:
+        serving_dir: Directory containing ``replica-*.head`` files.
+
+    Returns:
+        One ``host:port`` per line, ordered by replica id, each newline
+        terminated. Empty string when no head files exist.
+    """
+    return "".join(f"{addr}\n" for addr in read_head_files(serving_dir))
 
 
 def render_targets(serving_dir: Path) -> str:
@@ -270,6 +292,7 @@ class SupervisorOptions:
         emit_gpu_targets: Whether to also write gpu_targets.json and gpu_ownership.prom.
         emit_ray_targets: Whether to also write the Prometheus file_sd ray_targets.json.
         upstream_keepalive: Idle upstream connections cached per nginx worker.
+        router_address: ``host:port`` of a local router to front the ``llm`` upstream.
     """
 
     serving_dir: Path
@@ -280,12 +303,13 @@ class SupervisorOptions:
     emit_gpu_targets: bool = False
     emit_ray_targets: bool = False
     upstream_keepalive: int = 0
+    router_address: str | None = None
 
 
 def reconcile_once(opts: SupervisorOptions) -> bool:
     """Regenerate the upstreams file and targets from the current head files.
 
-    Writes ``00-upstreams.conf`` (and ``targets.json`` when
+    Writes ``00-upstreams.conf`` and ``replicas.txt`` (and ``targets.json`` when
     ``opts.emit_targets`` is set) to ``opts.serving_dir``. Does **not** reload
     nginx — reload is performed host-side by ``lb.sh.j2``.
 
@@ -301,8 +325,10 @@ def reconcile_once(opts: SupervisorOptions) -> bool:
         ray_dashboard_port=opts.ray_dashboard_port,
         ray_port=opts.ray_port,
         upstream_keepalive=opts.upstream_keepalive,
+        router_address=opts.router_address,
     )
     changed = write_if_changed(opts.serving_dir / UPSTREAMS_FILENAME, conf)
+    write_if_changed(opts.serving_dir / REPLICAS_FILENAME, render_replicas(opts.serving_dir))
     if opts.emit_targets:
         write_if_changed(opts.serving_dir / TARGETS_FILENAME, render_targets(opts.serving_dir))
     if opts.emit_gpu_targets:
@@ -375,6 +401,7 @@ def parse_args(argv: list[str] | None = None) -> tuple[SupervisorOptions, bool, 
     p.add_argument("--emit-gpu-targets", action="store_true")
     p.add_argument("--emit-ray-targets", action="store_true")
     p.add_argument("--upstream-keepalive", type=int, default=0)
+    p.add_argument("--router-address", default=None, metavar="HOST:PORT")
     a = p.parse_args(argv)
     opts = SupervisorOptions(
         serving_dir=Path(a.serving_dir),
@@ -385,6 +412,7 @@ def parse_args(argv: list[str] | None = None) -> tuple[SupervisorOptions, bool, 
         emit_gpu_targets=a.emit_gpu_targets,
         emit_ray_targets=a.emit_ray_targets,
         upstream_keepalive=a.upstream_keepalive,
+        router_address=a.router_address,
     )
     return opts, a.once, a.interval
 

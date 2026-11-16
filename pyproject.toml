@@ -1,6 +1,6 @@
 [project]
 name = "domyn-swarm"
-version = "0.35.0"
+version = "0.36.0"
 description = "CLI and programmatic API to launch LLM inference endpoints on Slurm, using simple configuration files"
 dynamic = ["readme"]
 requires-python = ">=3.11,<3.15"
@@ -42,6 +42,7 @@ maintainers = [
 ]
 dependencies = [
     "blake3>=1.0.5",
+    "click>=8.0",
     "fsspec>=2025.3.0",
     "huggingface-hub>=1.16.0",
     "jinja2>=3.1.6",
@@ -84,7 +85,6 @@ docs = [
     "pydata-sphinx-theme>=0.20",
     "sphinx-design>=0.7",
     "sphinx-copybutton>=0.5",
-    "sphinx-click>=6.2",
 ]
 bench = [
     "datasets>=4.8.5",

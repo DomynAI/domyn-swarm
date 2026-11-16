@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 import domyn_swarm.cli.job as mod
@@ -118,8 +119,16 @@ def test_submit_script_raises_without_config_or_name(mocker, tmp_path: Path):
     assert "State is null" in str(result.exception)
 
 
-def test_submit_job_with_config_happy_path(mocker, tmp_path: Path):
+@pytest.mark.parametrize("expand_paths", [False, True])
+def test_submit_job_with_config_happy_path(mocker, monkeypatch, tmp_path: Path, expand_paths):
     in_path, out_path = _mk_files(tmp_path)
+    input_arg, output_arg = str(in_path), str(out_path)
+    if expand_paths:
+        monkeypatch.setenv("JOB_DATA_DIR", str(tmp_path))
+        input_arg, output_arg = (
+            f"${{JOB_DATA_DIR}}/{in_path.name}",
+            f"${{JOB_DATA_DIR}}/{out_path.name}",
+        )
     config_path = tmp_path / "cfg.yaml"
     config_path.write_text("model: my-model\nname: my-swarm")
 
@@ -157,9 +166,9 @@ def test_submit_job_with_config_happy_path(mocker, tmp_path: Path):
         [
             "submit",
             "--input",
-            str(in_path),
+            input_arg,
             "--output",
-            str(out_path),
+            output_arg,
             "-c",
             str(tmp_path / "cfg.yaml"),
             "--job-kwargs",

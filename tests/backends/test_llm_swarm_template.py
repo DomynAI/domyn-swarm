@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import jinja2
 
+from domyn_swarm.config.router import NginxRouter
 from domyn_swarm.config.slurm import GpuExporterConfig
 
 TPL_DIR = Path("src/domyn_swarm/templates")
@@ -15,7 +16,7 @@ def _cfg(gpu_enabled, kind="nvidia_smi", requeue=True):
     """Build a minimal config-like object exposing the real GpuExporterConfig methods."""
     gx = GpuExporterConfig(enabled=gpu_enabled, kind=kind)
     mon = SimpleNamespace(enabled=True, mode="binary", gpu_exporter=gx)
-    ep = SimpleNamespace(port=9000, monitoring=mon, ray_port=6379)
+    ep = SimpleNamespace(port=9000, monitoring=mon, ray_port=6379, router=NginxRouter())
     backend = SimpleNamespace(
         endpoint=ep,
         requires_ray=False,

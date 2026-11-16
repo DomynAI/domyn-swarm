@@ -14,7 +14,7 @@ import typer
 from domyn_swarm.cli import job_helpers as helpers
 from domyn_swarm.cli.errors import exit_on_config_path_error
 from domyn_swarm.core.state.state_manager import SwarmStateManager
-from domyn_swarm.utils.click_env_path import ClickEnvPath
+from domyn_swarm.utils.env_path import EnvPath
 
 
 class _LazyDomynLLMSwarm:
@@ -146,14 +146,18 @@ def submit_script(
         )
 
 
+def _parse_job_path(value: str) -> Path:
+    return Path(str(EnvPath(value)))
+
+
 @job_app.command("submit")
 def submit_job(
     job_class: str = typer.Argument(
         default="domyn_swarm.jobs:ChatCompletionJob",
         help="Job class to run, in the form `module:ClassName`",
     ),
-    input: Path = typer.Option(..., "--input", exists=True, click_type=ClickEnvPath()),
-    output: Path = typer.Option(..., "--output", click_type=ClickEnvPath()),
+    input: Path = typer.Option(..., "--input", parser=_parse_job_path, metavar="ENVPATH"),
+    output: Path = typer.Option(..., "--output", parser=_parse_job_path, metavar="ENVPATH"),
     input_column: str = typer.Option("messages", "--input-column"),
     output_column: str = typer.Option("results", "--output-column"),
     id_column: str | None = typer.Option(

@@ -5,6 +5,7 @@ Each guide covers one task. Read the guide that matches your task.
 ## Platforms
 
 - [Running on Slurm](slurm.md): Singularity images, bind mounts, modules, and node selection
+- [Load balancing and routers](load-balancing.md): Router selection, configuration, and session IDs
 - [Running on Lepton](lepton.md): Endpoints, job configuration, secrets, and platform differences
 
 ## Running work
@@ -34,6 +35,7 @@ For *why* things are built this way rather than how to use them, see
 :hidden:
 
 slurm
+load-balancing
 lepton
 submitting-jobs
 checkpointing

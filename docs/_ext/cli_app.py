@@ -1,40 +1,44 @@
 # SPDX-FileCopyrightText: 2025-2026 Domyn
 # SPDX-License-Identifier: Apache-2.0
 
-"""Expose a fully-resolved Click group for ``sphinx-click``.
-
-``domyn_swarm.cli.main.LazyGroup`` imports its heavy sub-apps only when a
-command is requested, so ``group.commands`` is empty until something asks. Any
-introspection that reads ``commands`` directly would therefore miss ``job``,
-``pool``, ``init``, ``swarm`` and ``db``. Resolving every name up front makes the
-generated reference complete regardless of how the documenter traverses.
-"""
+"""Generate the CLI reference with Typer's own Markdown formatter."""
 
 from __future__ import annotations
 
-import click
-import typer.main
+from pathlib import Path
+import subprocess
+import sys
+from typing import TYPE_CHECKING
 
-from domyn_swarm.cli.main import app
-
-
-def _warmed_group() -> click.Group:
-    """Return the root Click group with every lazy sub-app resolved."""
-    # get_command, not get_group: only get_command attaches Typer's own
-    # --install-completion / --show-completion options to the root, and a
-    # reference that omits them would be missing two real global flags.
-    group = typer.main.get_command(app)
-    if not isinstance(group, click.Group):
-        raise RuntimeError("the root CLI is expected to be a group of commands")
-    ctx = click.Context(group)
-    for name in group.list_commands(ctx):
-        resolved = group.get_command(ctx, name)
-        if resolved is None:  # pragma: no cover - defensive
-            raise RuntimeError(
-                f"command {name!r} was listed but could not be resolved; "
-                "the CLI reference would be incomplete"
-            )
-    return group
+if TYPE_CHECKING:
+    from sphinx.application import Sphinx
 
 
-cli = _warmed_group()
+def render_cli_reference() -> str:
+    """Render every CLI command, including the lazily loaded subcommands."""
+    return subprocess.check_output(
+        [
+            sys.executable,
+            "-m",
+            "typer",
+            "domyn_swarm.cli.main",
+            "utils",
+            "docs",
+            "--name",
+            "domyn-swarm",
+        ],
+        text=True,
+    )
+
+
+def generate(app: Sphinx) -> None:
+    """Write the CLI reference before Sphinx reads the Markdown include."""
+    out_dir = Path(app.srcdir) / "_generated"
+    out_dir.mkdir(exist_ok=True)
+    (out_dir / "cli.md").write_text(render_cli_reference(), encoding="utf-8")
+
+
+def setup(app: Sphinx) -> dict[str, bool]:
+    """Register the CLI reference generator."""
+    app.connect("builder-inited", generate)
+    return {"parallel_read_safe": True, "parallel_write_safe": True}

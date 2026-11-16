@@ -22,6 +22,8 @@ check_colocated_lb() {
 trap stop_colocated_lb EXIT
 
 if [[ "$REPL_ID" == 0 ]]; then
+  # A requeued task must not read the collector address of its previous run.
+  rm -f "{{ swarm_directory }}/serving/collector.env"
   ENDPOINT_JOB="{{ swarm_directory }}/serving/endpoint.job"
   echo "$REPL_JOB_ID $SLURM_JOB_ID $HEAD_NODE" > "$ENDPOINT_JOB.tmp" && mv "$ENDPOINT_JOB.tmp" "$ENDPOINT_JOB"
   mkdir -p "{{ swarm_directory }}/logs/endpoint"

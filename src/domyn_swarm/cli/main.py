@@ -358,8 +358,17 @@ def check_status(
         ),
         replica_summary=replica_summary,
         replica_rows=replica_rows,
+        router=_router_type(swarm),
         console=_get_console(),
     )
+
+
+def _router_type(swarm) -> str | None:
+    """Return the Slurm load-balancer router type, or `None` for other backends."""
+    from ..config.slurm import SlurmConfig
+
+    backend = swarm.cfg.backend
+    return backend.endpoint.router.type if isinstance(backend, SlurmConfig) else None
 
 
 def _build_status_json(
@@ -455,6 +464,7 @@ def _build_status_json(
                     "role": "load_balancer",
                     "jobid": meta.get("lb_jobid"),
                     "node": meta.get("lb_node"),
+                    "router": _router_type(swarm),
                 }
             )
         slurm_jobs = jobs

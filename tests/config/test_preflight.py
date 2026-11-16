@@ -411,3 +411,52 @@ def test_report_is_ascii_so_it_survives_a_C_locale_stream(tmp_path):
     report.encode("ascii")  # raises UnicodeEncodeError if a fancy glyph crept in
     assert "cfg.yaml" in report
     assert "/shared/images/vllm.sif" in report
+
+
+# --- routers ----------------------------------------------------------------
+
+
+def _router_cfg(tmp_path, router):
+    return _cfg(
+        tmp_path,
+        backend={"endpoint": {"nginx_image": str(tmp_path / "nginx.sif"), "router": router}},
+    )
+
+
+def test_router_bare_binary_is_not_a_path_problem(tmp_path):
+    cfg = _router_cfg(tmp_path, {"type": "vllm-router", "binary": "vllm-router"})
+    assert check_config_paths(cfg) == []
+
+
+def test_router_missing_binary_path_is_reported(tmp_path):
+    cfg = _router_cfg(tmp_path, {"type": "vllm-router", "binary": "/missing/vllm-router"})
+    assert _fields(check_config_paths(cfg)) == ["backend.endpoint.router.binary"]
+
+
+def test_router_missing_image_is_reported(tmp_path):
+    cfg = _router_cfg(tmp_path, {"type": "ramjet", "image": "/missing/r.sif"})
+    assert _fields(check_config_paths(cfg)) == ["backend.endpoint.router.image"]
+
+
+def test_dynamo_venv_without_pyvenv_cfg_is_reported(tmp_path):
+    venv = tmp_path / "v"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").touch()
+    cfg = _router_cfg(tmp_path, {"type": "dynamo", "venv": str(venv)})
+    problems = check_config_paths(cfg)
+    assert _fields(problems) == ["backend.endpoint.router.venv"]
+    assert problems[0].value == str(venv / "pyvenv.cfg")
+
+
+def test_dynamo_venv_with_pyvenv_cfg_passes_when_bin_python_points_into_the_image(tmp_path):
+    venv = tmp_path / "v"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    (venv / "bin" / "python").symlink_to("/opt/image-only/bin/python3")
+    cfg = _router_cfg(tmp_path, {"type": "dynamo", "venv": str(venv)})
+    assert check_config_paths(cfg) == []
+
+
+def test_dynamo_missing_policy_config_is_reported(tmp_path):
+    cfg = _router_cfg(tmp_path, {"type": "dynamo", "policy_config": str(tmp_path / "missing.yaml")})
+    assert _fields(check_config_paths(cfg)) == ["backend.endpoint.router.policy_config"]
